@@ -1,0 +1,11 @@
+{
+  "fill" : { "linear-gradient" : [ "extended-srgb:0.141,0.533,0.243,1.000", "extended-srgb:0.098,0.424,0.188,1.000" ] },
+  "groups" : [
+    {
+      "layers" : [
+        { "glass" : false, "image-name" : "sheepradius-artwork.png" }
+      ]
+    }
+  ],
+  "supported-platforms" : { "squares" : [ "macOS" ] }
+}
