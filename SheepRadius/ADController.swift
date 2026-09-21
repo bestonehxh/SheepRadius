@@ -887,13 +887,12 @@ final class ADController: ObservableObject {
         return nil
     }
 
-    /// Anonymous rootDSE on the published 389. The prototype's readiness check, and the right
-    /// one: it proves the *published* socket answers, not merely that the container is up.
+    /// Anonymous rootDSE from inside the DC. The container runtime's host port proxy can accept
+    /// TCP while its bridge forwarding is still unavailable; probing through that socket made
+    /// the UI spin forever even though Samba was already serving LDAP inside the container.
     ///
-    /// Readiness is deliberately checked through loopback. Some Wi-Fi networks do not route a
-    /// Mac back to its own LAN address (the socket just times out), even though the wildcard
-    /// listener is healthy and remote clients can reach it. Using `hostIP` here left the UI in
-    /// Starting for the whole 300-attempt loop after the DC was already serving LDAP.
+    /// The published host/LAN reachability remains covered by the AD self-test's port checks;
+    /// readiness only decides whether the DC itself has finished starting.
     ///
     /// **Both timeouts are load-bearing.** `container` publishes a port by proxying it, so the
     /// host socket accepts long before anything inside the container listens — a plain
@@ -901,21 +900,17 @@ final class ADController: ObservableObject {
     /// code sat in exactly that state through a whole provision. `NetProbe.canConnect` keeps
     /// the common case fast and `-o nettimeout` is the belt to its braces.
     private func waitForLDAP(tool: String) async -> Bool {
-        guard let ldapsearch = tools.ldapsearch else { return true }
         for attempt in 0..<300 {
             let listing = await Shell.run(tool, ["ls", "--format", "json"], environment: [:])
             guard ADContainerList.parse(listing.output).contains(where: { $0.id == containerName && $0.isRunning }) else {
                 return false                       // the container exited; the caller prints its log
             }
-            let readinessHost = "127.0.0.1"
-            if NetProbe.canConnect(readinessHost, 389, timeout: 2) {
-                let probe = await Shell.run(ldapsearch,
-                                            ["-x", "-o", "nettimeout=5", "-o", "timeout=5",
-                                             "-H", "ldap://\(readinessHost):389",
-                                             "-s", "base", "-b", "", "defaultNamingContext"],
-                                            environment: tools.childEnvironment)
-                if probe.output.lowercased().contains("defaultnamingcontext:") { return true }
-            }
+            let probe = await Shell.run(tool,
+                                        ["exec", containerName, "ldapsearch", "-x",
+                                         "-o", "nettimeout=5", "-o", "timeout=5",
+                                         "-H", "ldap://127.0.0.1:389", "-s", "base", "-b", "",
+                                         "defaultNamingContext"], environment: [:])
+            if probe.output.lowercased().contains("defaultnamingcontext:") { return true }
             if attempt == 20 { note("—— still waiting for the DC (a first provision takes about a minute)") }
             try? await Task.sleep(for: .seconds(1))
         }

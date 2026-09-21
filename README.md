@@ -43,6 +43,9 @@ to its own LAN address can no longer leave the app showing Starting after Samba 
 Build 30 uses Samba's dedicated OU rename command and recursive OU deletion flag, so renaming
 an OU and deleting a parent OU with child OUs now updates the AD tree as expected.
 
+Build 31 checks AD readiness inside the Samba container, avoiding a false indefinite wait when
+Apple Container's host port proxy is up before its bridge forwarding is reachable.
+
 **One width rule, everywhere.** A pane is its column plus a gutter that grows with the window
 (3 % of the pane, between 20 and 96 pt), and that is now true of the table panes as well as the
 grouped ones. On Users the OU tree is 240 pt and grows to 320 on a wide window, the inspector is
