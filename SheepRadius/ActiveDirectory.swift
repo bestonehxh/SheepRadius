@@ -57,10 +57,17 @@ nonisolated struct ADSettings: Codable, Hashable, Sendable {
     /// takes it the moment the first container starts, so the app binds it itself, first.
     static let tcpPorts = [88, 135, 389, 445, 464, 636, 3268, 3269]
     static let udpPorts = [88, 123, 389, 464]
-    static let rpcPortRange = "49152-49172"
+    /// Keep Samba's dynamic RPC endpoints below macOS's ephemeral range (49152–65535).
+    /// `rapportd` commonly listens on 49152 for Continuity/AirPlay, which made an otherwise
+    /// clean start fail inside `container run` with only "Address already in use".
+    static let rpcPorts = Array(40000...40020)
+    static let rpcPortRange = "\(rpcPorts.first!)-\(rpcPorts.last!)"
     /// Checked for a conflict before starting, and listed in the failure message.
     static var allPorts: [(port: Int, proto: String)] {
-        tcpPorts.map { ($0, "TCP") } + udpPorts.map { ($0, "UDP") } + [(53, "UDP"), (53, "TCP")]
+        tcpPorts.map { ($0, "TCP") }
+            + rpcPorts.map { ($0, "TCP") }
+            + udpPorts.map { ($0, "UDP") }
+            + [(53, "UDP"), (53, "TCP")]
     }
 
     enum CodingKeys: String, CodingKey {

@@ -88,6 +88,7 @@ nonisolated enum DirectorySnapshotParser {
                 snapshot.users.append(DirectoryUser(
                     username: name,
                     displayName: ADLDIF.first(record, "displayName") ?? "",
+                    userPrincipalName: ADLDIF.first(record, "userPrincipalName") ?? "",
                     ou: ADDirectoryCommands.userOU(fromDN: dn, baseDN: baseDN),
                     groups: ADLDIF.all(record, "memberOf").map(rdnValue(of:)).sorted(),
                     enabled: ADAccountControl.isEnabled(ADLDIF.first(record, "userAccountControl")) ?? true,
@@ -138,6 +139,7 @@ nonisolated enum DirectorySnapshotParser {
                 snapshot.users.append(DirectoryUser(
                     username: name,
                     displayName: ADLDIF.first(record, "displayName") ?? "",
+                    userPrincipalName: ADLDIF.first(record, "userPrincipalName") ?? "",
                     ou: ADDirectoryCommands.userOU(fromDN: dn, baseDN: suffix),
                     // `netusers` is generated, not a group anybody joined — it is every
                     // enabled user by definition, and listing it beside the real ones would
@@ -291,6 +293,39 @@ actor ADDirectory: DirectoryProvider {
             : LDIFValue.row("dn", dn) + "changetype: modify\nreplace: displayName\n"
                 + LDIFValue.row("displayName", displayName)
         _ = try await exec(["ldbmodify", "-H", ADCommands.sambaDatabase], input: ldif)
+    }
+
+    func setUserPrincipalName(_ username: String, to userPrincipalName: String) async throws {
+        if let problem = DirectoryNames.userPrincipalNameProblem(userPrincipalName) {
+            throw DirectoryError.refused(problem)
+        }
+        let others = try await snapshot().users.filter {
+            $0.username.caseInsensitiveCompare(username) != .orderedSame
+                && $0.userPrincipalName.caseInsensitiveCompare(userPrincipalName) == .orderedSame
+        }
+        guard others.isEmpty else {
+            throw DirectoryError.nameTaken("“\(userPrincipalName)” is already used by another account.")
+        }
+
+        // Register a non-realm suffix in the forest before putting it on the account. This is
+        // the command-line step Active Directory Domains and Trusts performs, made automatic
+        // so a lab UPN such as student@stu.lab.sheep is usable rather than merely visible.
+        let suffix = String(userPrincipalName.split(separator: "@", maxSplits: 1)[1]).lowercased()
+        let realm = baseDN.split(separator: ",").compactMap { component -> String? in
+            let part = component.trimmingCharacters(in: .whitespaces)
+            return part.lowercased().hasPrefix("dc=") ? String(part.dropFirst(3)) : nil
+        }.joined(separator: ".").lowercased()
+        if suffix != realm {
+            let output = try await exec(ADDirectoryCommands.readUPNSuffixes(baseDN: baseDN))
+            let record = ADLDIF.parse(output).first ?? [:]
+            let known = ADLDIF.all(record, "uPNSuffixes")
+            if !known.contains(where: { $0.caseInsensitiveCompare(suffix) == .orderedSame }) {
+                _ = try await exec(["ldbmodify", "-H", ADCommands.sambaDatabase],
+                                   input: ADDirectoryCommands.addUPNSuffixLDIF(suffix, baseDN: baseDN))
+            }
+        }
+        try await run(ADDirectoryCommands.setUserPrincipalName(username, to: userPrincipalName),
+                      subject: userPrincipalName)
     }
 
     func setEnabled(_ username: String, to enabled: Bool) async throws {
@@ -544,6 +579,22 @@ actor OpenLDAPDirectory: DirectoryProvider {
         try await bound(tools.ldapmodify, [], input: OpenLDAPDirectoryCommands.replaceLDIF(
             dn: dn, attribute: "displayName", value: displayName.isEmpty ? username : displayName),
                         subject: username)
+    }
+
+    func setUserPrincipalName(_ username: String, to userPrincipalName: String) async throws {
+        if let problem = DirectoryNames.userPrincipalNameProblem(userPrincipalName) {
+            throw DirectoryError.refused(problem)
+        }
+        let others = try await snapshot().users.filter {
+            $0.username.caseInsensitiveCompare(username) != .orderedSame
+                && $0.userPrincipalName.caseInsensitiveCompare(userPrincipalName) == .orderedSame
+        }
+        guard others.isEmpty else {
+            throw DirectoryError.nameTaken("“\(userPrincipalName)” is already used by another account.")
+        }
+        let dn = try await dn(ofUser: username)
+        try await bound(tools.ldapmodify, [], input: OpenLDAPDirectoryCommands.replaceLDIF(
+            dn: dn, attribute: "userPrincipalName", value: userPrincipalName), subject: username)
     }
 
     func setEnabled(_ username: String, to enabled: Bool) async throws {

@@ -1117,6 +1117,7 @@ private struct UserProperties: View {
 
     @State private var displayName = ""
     @State private var username = ""
+    @State private var userPrincipalName = ""
     @State private var password = ""
     @State private var issuing = false
     @State private var confirmRevoke = false
@@ -1126,7 +1127,7 @@ private struct UserProperties: View {
     /// first half was true: typing a display name and clicking anywhere else threw the edit
     /// away without a word. `@FocusState` is what makes the second half real — SwiftUI has no
     /// per-field "editing ended" callback, so the commit hangs off the focus leaving.
-    private enum Field: Hashable { case displayName, username }
+    private enum Field: Hashable { case displayName, username, userPrincipalName }
     @FocusState private var focused: Field?
 
     var body: some View {
@@ -1148,6 +1149,13 @@ private struct UserProperties: View {
                     TextField("alice", text: $username)
                         .focused($focused, equals: .username)
                         .onSubmit { commitRename() }
+                }
+                InspectorField("User principal name") {
+                    TextField("alice@lab.sheep", text: $userPrincipalName)
+                        .focused($focused, equals: .userPrincipalName)
+                        .onSubmit { commitUserPrincipalName() }
+                    Text("Use a different suffix to test account mapping in a NAC. Samba AD registers it as an alternate UPN suffix automatically.")
+                        .hint()
                 }
                 InspectorField("Password") {
                     HStack(spacing: 6) {
@@ -1272,12 +1280,14 @@ private struct UserProperties: View {
             switch was {
             case .displayName: commitDisplayName()
             case .username: commitRename()
+            case .userPrincipalName: commitUserPrincipalName()
             case nil: break
             }
         }
         .onAppear(perform: load)
         .onChange(of: user.username) { load() }
         .onChange(of: user.displayName) { load() }
+        .onChange(of: user.userPrincipalName) { load() }
         .sheet(isPresented: $issuing) {
             ClientCertificateSheet(username: user.username) { issuing = false }
         }
@@ -1286,6 +1296,7 @@ private struct UserProperties: View {
     private func load() {
         displayName = user.displayName
         username = user.username
+        userPrincipalName = user.userPrincipalName
         password = ""
     }
 
@@ -1325,6 +1336,27 @@ private struct UserProperties: View {
         } then: {
             model.renameDirectoryPassword(from: old, to: trimmed)
             model.selectedUser = trimmed
+        }
+    }
+
+    private func commitUserPrincipalName() {
+        let value = userPrincipalName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.caseInsensitiveCompare(user.userPrincipalName) != .orderedSame else { return }
+        if let problem = DirectoryNames.userPrincipalNameProblem(value) {
+            model.report(problem)
+            load()
+            return
+        }
+        if model.directory.users.contains(where: {
+            $0.username.caseInsensitiveCompare(user.username) != .orderedSame
+                && $0.userPrincipalName.caseInsensitiveCompare(value) == .orderedSame
+        }) {
+            model.report("“\(value)” is already used by another account.")
+            load()
+            return
+        }
+        edit("User principal name") {
+            try await $0.setUserPrincipalName(user.username, to: value)
         }
     }
 

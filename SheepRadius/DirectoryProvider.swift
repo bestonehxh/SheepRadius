@@ -13,6 +13,9 @@ nonisolated struct DirectoryUser: Sendable, Equatable, Identifiable {
     var id: String { dn }
     var username: String
     var displayName: String = ""
+    /// The full sign-in name a NAC can map as its account attribute. Unlike
+    /// `sAMAccountName`, its suffix may differ between users in the same domain.
+    var userPrincipalName: String = ""
     /// `Staff/IT`, the app's own OU notation. Empty means the top of the directory.
     var ou: String = ""
     var groups: [String] = []
@@ -249,6 +252,7 @@ protocol DirectoryProvider: Sendable {
     func createUser(_ username: String, displayName: String, ou: String, password: String) async throws
     func setPassword(_ username: String, to password: String) async throws
     func setDisplayName(_ username: String, to displayName: String) async throws
+    func setUserPrincipalName(_ username: String, to userPrincipalName: String) async throws
     func setEnabled(_ username: String, to enabled: Bool) async throws
     func moveUser(_ username: String, toOU ou: String) async throws
     func renameUser(_ username: String, to newName: String) async throws
@@ -606,6 +610,38 @@ nonisolated enum DirectoryNames {
         return nil
     }
 
+    /// A UPN is one account name plus one DNS suffix. It deliberately does not require the
+    /// suffix to equal the AD realm: alternate suffixes are the feature this validates.
+    static func userPrincipalNameProblem(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed == value, !trimmed.isEmpty else {
+            return "The user principal name cannot be empty or begin or end with whitespace."
+        }
+        if let problem = controlCharacterProblem(trimmed, what: "The user principal name") {
+            return problem
+        }
+        guard !trimmed.contains(where: { $0.isWhitespace }) else {
+            return "The user principal name cannot contain whitespace."
+        }
+        let pieces = trimmed.split(separator: "@", omittingEmptySubsequences: false)
+        guard pieces.count == 2, !pieces[0].isEmpty, !pieces[1].isEmpty else {
+            return "Use one full sign-in name, for example alice@stu.lab.sheep."
+        }
+        guard trimmed.count <= Validation.maxDisplayNameLength else {
+            return "The user principal name is too long. The limit is \(Validation.maxDisplayNameLength) characters."
+        }
+        let suffix = String(pieces[1])
+        let labels = suffix.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2, labels.allSatisfy({ label in
+            !label.isEmpty && label.count <= 63
+                && label.first != "-" && label.last != "-"
+                && label.unicodeScalars.allSatisfy { Validation.dnsLabelAllowed.contains($0) }
+        }) else {
+            return "The part after @ must be a DNS name such as stu.lab.sheep."
+        }
+        return nil
+    }
+
     /// **May this account be issued an EAP-TLS client certificate?** (build 24, the owner
     /// could not find the button.)
     ///
@@ -771,6 +807,25 @@ nonisolated enum ADDirectoryCommands {
          "--samaccountname=" + newName, "--force-new-cn=" + newName]
     }
 
+    static func setUserPrincipalName(_ username: String, to value: String) -> [String] {
+        ["samba-tool", "user", "rename", username, "--upn=" + value]
+    }
+
+    static func partitionsDN(baseDN: String) -> String {
+        "CN=Partitions,CN=Configuration," + baseDN
+    }
+
+    static func readUPNSuffixes(baseDN: String) -> [String] {
+        ["ldbsearch", "-H", ADCommands.sambaDatabase, "-b", partitionsDN(baseDN: baseDN),
+         "-s", "base", "uPNSuffixes"]
+    }
+
+    static func addUPNSuffixLDIF(_ suffix: String, baseDN: String) -> String {
+        LDIFValue.row("dn", partitionsDN(baseDN: baseDN))
+            + "changetype: modify\nadd: uPNSuffixes\n"
+            + LDIFValue.row("uPNSuffixes", suffix)
+    }
+
     /// **By name, never by DN.** The build-15 rule, kept: a delete that carries a DN can be
     /// pointed at `CN=Guests,CN=Builtin`; one that carries a name is refused by the protected
     /// name list before it is ever built.
@@ -842,7 +897,7 @@ nonisolated enum ADDirectoryCommands {
         ["ldbsearch", "-H", ADCommands.sambaDatabase, "-b", baseDN, "-s", "sub",
          "(|(objectClass=user)(objectClass=group)(objectClass=organizationalUnit))",
          "dn", "objectClass", "sAMAccountName", "displayName", "description",
-         "userAccountControl", "member", "memberOf"]
+         "userPrincipalName", "userAccountControl", "member", "memberOf"]
     }
 
     // MARK: Passwords, which never appear in an argument vector
@@ -987,7 +1042,8 @@ nonisolated enum OpenLDAPDirectoryCommands {
     static func readAll(suffix: String) -> [String] {
         ["-LLL", "-b", suffix, "-s", "sub",
          "(|(objectClass=inetOrgPerson)(objectClass=groupOfNames)(objectClass=organizationalUnit))",
-         "dn", "objectClass", "uid", "cn", "displayName", "description", "member", "memberOf"]
+         "dn", "objectClass", "uid", "cn", "displayName", "userPrincipalName",
+         "description", "member", "memberOf"]
     }
 
     static func dn(forOU path: String, suffix: String) -> String {
@@ -1833,6 +1889,7 @@ nonisolated struct OfflineDirectory: DirectoryProvider {
     func createUser(_ username: String, displayName: String, ou: String, password: String) async throws { throw stopped }
     func setPassword(_ username: String, to password: String) async throws { throw stopped }
     func setDisplayName(_ username: String, to displayName: String) async throws { throw stopped }
+    func setUserPrincipalName(_ username: String, to userPrincipalName: String) async throws { throw stopped }
     func setEnabled(_ username: String, to enabled: Bool) async throws { throw stopped }
     func moveUser(_ username: String, toOU ou: String) async throws { throw stopped }
     func renameUser(_ username: String, to newName: String) async throws { throw stopped }

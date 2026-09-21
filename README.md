@@ -30,6 +30,12 @@ card is gone from Users and Groups. Ordinary accounts in Active Directory's defa
 container can be edited, moved, renamed, assigned to groups and deleted; only the actual built-in
 accounts remain protected.
 
+Build 28 lets each directory account use an explicit **userPrincipalName**, including alternate
+suffixes such as `stu.lab.sheep` and `guest.lab.sheep`; Samba AD registers a newly used suffix in
+the forest before assigning it. It also moves Samba's pinned dynamic-RPC range below macOS's
+ephemeral range, avoiding the `rapportd` collision on TCP 49152 while checking every RPC port
+before the domain controller starts.
+
 **One width rule, everywhere.** A pane is its column plus a gutter that grows with the window
 (3 % of the pane, between 20 and 96 pt), and that is now true of the table panes as well as the
 grouped ones. On Users the OU tree is 240 pt and grows to 320 on a wide window, the inspector is
@@ -50,7 +56,9 @@ empty table is one sentence rather than twenty empty rows.
 - **LDAP** on tcp/389 — nested OUs, `groupOfNames` groups, and AD-style attributes
   (`sAMAccountName`, `userPrincipalName`, `memberOf`) so a device configured for Active
   Directory finds what it expects. **This is the one place accounts live**: Users and Groups
-  edit the running directory, and RADIUS checks passwords against it.
+  edit the running directory, and RADIUS checks passwords against it. A user's editor can give
+  each account its own UPN suffix (for example `student@stu.lab.sheep`); Samba AD registers a
+  new suffix as an alternate UPN suffix automatically before saving the account.
 - **Two switches, one pair — and the pair is RADIUS + OpenLDAP.** The sidebar has **RADIUS**
   and **LDAP**, each with its own switch, and under the LDAP one the choice of **OpenLDAP** or
   **Samba AD**. Turning RADIUS on starts a directory first — there is nowhere else for it to

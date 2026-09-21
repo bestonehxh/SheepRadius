@@ -1129,7 +1129,7 @@ final class ADController: ObservableObject {
         }
 
         // 4. The ports a join opens, including the first RPC port.
-        for port in ADSettings.tcpPorts.filter({ $0 != 3269 }) + [53, 49152] {
+        for port in ADSettings.tcpPorts.filter({ $0 != 3269 }) + [53, ADSettings.rpcPorts[0]] {
             let open = NetProbe.canConnect(address, port, timeout: 2)
             result(open ? .ok : .failed, "tcp/\(port) reachable at \(address)", open ? "" : "connect refused or timed out")
         }
