@@ -879,14 +879,14 @@ nonisolated enum ADDirectoryCommands {
         ["samba-tool", "ou", "create", dn(forOU: path, baseDN: baseDN)]
     }
     static func deleteOU(_ path: String, baseDN: String) -> [String] {
-        ["samba-tool", "ou", "delete", dn(forOU: path, baseDN: baseDN)]
+        ["samba-tool", "ou", "delete", dn(forOU: path, baseDN: baseDN), "--force-subtree-delete"]
     }
-    /// `samba-tool ou move` is also the rename, because an OU's name **is** the last part of
-    /// its DN: moving `OU=IT,OU=Staff` to the same parent with a new name is what renaming is.
+    /// Samba has a dedicated `ou rename` command. `ou move --new-name` is not supported.
     static func renameOU(_ path: String, to newLeaf: String, baseDN: String) -> [String] {
         let parent = OUPath.parent(path) ?? ""
-        return ["samba-tool", "ou", "move", dn(forOU: path, baseDN: baseDN),
-                dn(forOU: parent, baseDN: baseDN), "--new-name=" + newLeaf]
+        let newPath = parent.isEmpty ? newLeaf : parent + "/" + newLeaf
+        return ["samba-tool", "ou", "rename", dn(forOU: path, baseDN: baseDN),
+                dn(forOU: newPath, baseDN: baseDN)]
     }
     static func moveOU(_ path: String, under parent: String, baseDN: String) -> [String] {
         ["samba-tool", "ou", "move", dn(forOU: path, baseDN: baseDN), dn(forOU: parent, baseDN: baseDN)]
