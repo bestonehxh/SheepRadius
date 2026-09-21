@@ -890,6 +890,11 @@ final class ADController: ObservableObject {
     /// Anonymous rootDSE on the published 389. The prototype's readiness check, and the right
     /// one: it proves the *published* socket answers, not merely that the container is up.
     ///
+    /// Readiness is deliberately checked through loopback. Some Wi-Fi networks do not route a
+    /// Mac back to its own LAN address (the socket just times out), even though the wildcard
+    /// listener is healthy and remote clients can reach it. Using `hostIP` here left the UI in
+    /// Starting for the whole 300-attempt loop after the DC was already serving LDAP.
+    ///
     /// **Both timeouts are load-bearing.** `container` publishes a port by proxying it, so the
     /// host socket accepts long before anything inside the container listens — a plain
     /// `ldapsearch` against it does not fail, it **blocks forever**, and the first run of this
@@ -902,10 +907,11 @@ final class ADController: ObservableObject {
             guard ADContainerList.parse(listing.output).contains(where: { $0.id == containerName && $0.isRunning }) else {
                 return false                       // the container exited; the caller prints its log
             }
-            if NetProbe.canConnect(hostIP, 389, timeout: 2) {
+            let readinessHost = "127.0.0.1"
+            if NetProbe.canConnect(readinessHost, 389, timeout: 2) {
                 let probe = await Shell.run(ldapsearch,
                                             ["-x", "-o", "nettimeout=5", "-o", "timeout=5",
-                                             "-H", "ldap://\(hostIP):389",
+                                             "-H", "ldap://\(readinessHost):389",
                                              "-s", "base", "-b", "", "defaultNamingContext"],
                                             environment: tools.childEnvironment)
                 if probe.output.lowercased().contains("defaultnamingcontext:") { return true }

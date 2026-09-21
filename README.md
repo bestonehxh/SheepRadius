@@ -36,6 +36,10 @@ the forest before assigning it. It also moves Samba's pinned dynamic-RPC range b
 ephemeral range, avoiding the `rapportd` collision on TCP 49152 while checking every RPC port
 before the domain controller starts.
 
+Build 29 makes the AD startup readiness probe use the container's published loopback socket.
+The LAN address remains what devices use, but a Wi-Fi network that cannot hairpin this Mac back
+to its own LAN address can no longer leave the app showing Starting after Samba is already up.
+
 **One width rule, everywhere.** A pane is its column plus a gutter that grows with the window
 (3 % of the pane, between 20 and 96 pt), and that is now true of the table panes as well as the
 grouped ones. On Users the OU tree is 240 pt and grows to 320 on a wide window, the inspector is
