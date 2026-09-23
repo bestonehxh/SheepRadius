@@ -207,7 +207,7 @@ struct UsersView: View {
             }
         }
         .paneColumn()
-        .padding(.top, 18)
+        .padding(.top, PaneColumn.headerTop)
         .padding(.bottom, 16)
     }
 
@@ -278,8 +278,12 @@ struct UsersView: View {
                             model.selectedUser = nil
                         }
                     }
+                    // One pass over the users for every node's count, not one pass per node.
+                    let counts = Dictionary(grouping: model.directory.users) {
+                        OUPath.normalized($0.ou).lowercased()
+                    }.mapValues(\.count)
                     ForEach(model.directory.ous) { ou in
-                        ouNode(ou)
+                        ouNode(ou, count: counts[OUPath.normalized(ou.path).lowercased()] ?? 0)
                     }
 
                     // **Why the New buttons are off** (build 25, QA H-5), where the selection
@@ -310,9 +314,8 @@ struct UsersView: View {
     }
 
     @ViewBuilder
-    private func ouNode(_ ou: DirectoryOU) -> some View {
+    private func ouNode(_ ou: DirectoryOU, count: Int) -> some View {
         let path = ou.path
-        let count = model.directory.users.filter { OUPath.isSame($0.ou, path) }.count
         row(title: OUPath.leaf(path), icon: count == 0 ? "folder" : "folder.fill", count: count,
             selected: !showingComputers && (selectedOU.map { OUPath.isSame($0, path) } ?? false),
             depth: OUPath.depth(path) - 1, muted: ou.isReadOnly || count == 0,
@@ -857,6 +860,11 @@ struct DirectoryOffline: View {
                         .lineLimit(4)
                         .frame(maxWidth: 460)
                 }
+                if let missing = model.directoryMissingItem {
+                    Button("Open Environment") { model.openEnvironment(for: missing) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.accent)
+                }
                 Button("Retry") { Task { await model.retryDirectoryFromPane() } }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
@@ -865,6 +873,11 @@ struct DirectoryOffline: View {
                 Text(unavailable)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.text2)
+                if let missing = model.directoryMissingItem {
+                    Button("Open Environment") { model.openEnvironment(for: missing) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.accent)
+                }
             } else {
                 ProgressView().controlSize(.small)
                 Text(model.directoryStartingLine)
@@ -1118,6 +1131,14 @@ private struct UserProperties: View {
     @State private var displayName = ""
     @State private var username = ""
     @State private var userPrincipalName = ""
+    /// The catalogued attributes being edited, keyed by AD name (`UserAttribute`).
+    @State private var values: [String: String] = [:]
+    /// Which ADUC tab's section is unfolded. General is open; the rest are one click away so
+    /// the inspector does not become a 25-field wall.
+    @State private var openSections: Set<UserAttribute.Section> = UserProperties.rememberedSections
+    /// Survives the `.id(user.dn)` that rebuilds this view per selection, so an unfolded
+    /// Address stays unfolded while clicking down the list.
+    private static var rememberedSections: Set<UserAttribute.Section> = [.general]
     @State private var password = ""
     @State private var issuing = false
     @State private var confirmRevoke = false
@@ -1127,7 +1148,7 @@ private struct UserProperties: View {
     /// first half was true: typing a display name and clicking anywhere else threw the edit
     /// away without a word. `@FocusState` is what makes the second half real — SwiftUI has no
     /// per-field "editing ended" callback, so the commit hangs off the focus leaving.
-    private enum Field: Hashable { case displayName, username, userPrincipalName }
+    private enum Field: Hashable { case displayName, username, userPrincipalName, attribute(String) }
     @FocusState private var focused: Field?
 
     var body: some View {
@@ -1156,6 +1177,9 @@ private struct UserProperties: View {
                         .onSubmit { commitUserPrincipalName() }
                     Text("Use a different suffix to test account mapping in a NAC. Samba AD registers it as an alternate UPN suffix automatically.")
                         .hint()
+                }
+                ForEach(UserAttribute.Section.allCases, id: \.self) { section in
+                    attributeSection(section)
                 }
                 InspectorField("Password") {
                     HStack(spacing: 6) {
@@ -1276,18 +1300,30 @@ private struct UserProperties: View {
         .controlSize(.small)
         .id(user.dn)
         // Whichever field the focus has just left is committed, exactly as ⏎ would (M-13).
-        .onChange(of: focused) { was, _ in
+        .onChange(of: focused) { was, now in
+            if case .attribute(let name) = now, UserAttribute.named(name)?.isASCIIOnly == true {
+                ASCIIInput.restrict(true)
+            } else {
+                ASCIIInput.restrict(false)
+            }
             switch was {
             case .displayName: commitDisplayName()
             case .username: commitRename()
             case .userPrincipalName: commitUserPrincipalName()
+            case .attribute(let name): commitAttribute(name)
             case nil: break
             }
         }
         .onAppear(perform: load)
+        .onDisappear { ASCIIInput.restrict(false) }
         .onChange(of: user.username) { load() }
         .onChange(of: user.displayName) { load() }
         .onChange(of: user.userPrincipalName) { load() }
+        .onChange(of: user.attributes) { old, new in
+            // Only the values the directory changed: a reload after committing one field must
+            // not wipe what is being typed into another.
+            for key in Set(old.keys).union(new.keys) where old[key] != new[key] { values[key] = new[key] }
+        }
         .sheet(isPresented: $issuing) {
             ClientCertificateSheet(username: user.username) { issuing = false }
         }
@@ -1297,7 +1333,93 @@ private struct UserProperties: View {
         displayName = user.displayName
         username = user.username
         userPrincipalName = user.userPrincipalName
+        values = user.attributes
         password = ""
+    }
+
+    /// One ADUC tab, as a disclosure group of fields. The section's title carries a count of
+    /// what is filled in, so a folded Address still says whether there is anything in it.
+    private func attributeSection(_ section: UserAttribute.Section) -> some View {
+        let fields = UserAttribute.section(section)
+        let filled = fields.filter { !user.value($0).isEmpty }.count
+        return DisclosureGroup(isExpanded: Binding(
+            get: { openSections.contains(section) },
+            set: {
+                if $0 { openSections.insert(section) } else { openSections.remove(section) }
+                UserProperties.rememberedSections = openSections
+            })) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(fields) { attributeField($0) }
+            }
+            .padding(.top, 6)
+        } label: {
+            HStack(spacing: 6) {
+                Text(section.rawValue).font(.system(size: 12, weight: .semibold))
+                if filled > 0 { Text("\(filled)").font(.system(size: 11)).foregroundStyle(Theme.faintText) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func attributeField(_ attribute: UserAttribute) -> some View {
+        InspectorField(attribute.label) {
+            if attribute.kind == .distinguishedName {
+                // A manager is an account, not text: AD refuses a DN that names nothing, so
+                // the only values offered are the accounts the directory has.
+                Picker("", selection: Binding(
+                    get: { user.value(attribute) },
+                    set: { dn in
+                        values[attribute.name] = dn
+                        commitAttribute(attribute.name)
+                    })) {
+                    Text("(none)").tag("")
+                    ForEach(model.directory.users.filter { $0.dn != user.dn }) { other in
+                        Text(other.displayName.isEmpty ? other.username : "\(other.displayName) (\(other.username))")
+                            .tag(other.dn)
+                    }
+                    // A manager outside what the snapshot lists (a DN from another tool) is
+                    // shown rather than silently replaced by "(none)".
+                    let current = user.value(attribute)
+                    if !current.isEmpty, !model.directory.users.contains(where: { $0.dn == current }) {
+                        Text(current).tag(current)
+                    }
+                }
+                .labelsHidden()
+            } else {
+                // No example value inside the field: "Alice" in Bob's First name read as Bob's
+                // data. An empty field is an empty attribute.
+                TextField(attribute.label, text: Binding(get: { values[attribute.name] ?? "" },
+                                        set: { values[attribute.name] = attribute.isASCIIOnly
+                                                   ? ASCIIInput.filtered($0) : $0 }),
+                          prompt: Text(""))
+                    .focused($focused, equals: .attribute(attribute.name))
+                    .onSubmit { commitAttribute(attribute.name) }
+            }
+        }
+    }
+
+    /// Commits one catalogued attribute — **only when it changed**. Every focus change used to
+    /// write, so tabbing through seven empty fields was seven directory modifies and seven
+    /// snapshot reloads.
+    private func commitAttribute(_ name: String) {
+        guard let attribute = UserAttribute.named(name) else { return }
+        let value = (values[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value != user.value(attribute) else { return }
+        // OpenLDAP writes the username into a cleared `sn` (it is MUST there); when it already
+        // holds that, the modify changes nothing and no snapshot would arrive to refill the
+        // field — so put it back here instead of writing it again.
+        if value.isEmpty, attribute.requiredInOpenLDAP,
+           !model.ad.isRunning,  // the panes read OpenLDAP whenever no domain controller is up
+           user.value(attribute) == user.username {
+            values[name] = user.username
+            return
+        }
+        if let problem = attribute.problem(value) {
+            model.report(problem)
+            load()
+            return
+        }
+        edit(attribute.label) { try await $0.setUserAttribute(user.username, attribute: name, value: value) }
     }
 
     private func revoke(_ serial: String?) {

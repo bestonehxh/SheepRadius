@@ -53,7 +53,13 @@ struct ContentView: View {
         .modifier(FullscreenSync())
         .ignoresSafeArea(.container, edges: .top)
         .sheet(isPresented: errorBinding) {
-            ErrorSheet(message: model.lastError ?? "", detail: model.lastErrorDetail) {
+            ErrorSheet(message: model.lastError ?? "", detail: model.lastErrorDetail,
+                       actionTitle: model.lastErrorAction?.title,
+                       action: {
+                           let action = model.lastErrorAction
+                           model.clearError()
+                           action?.run()
+                       }) {
                 model.clearError()
             }
         }
@@ -91,6 +97,7 @@ struct ContentView: View {
         case .ldapServer: LDAPServerView()
         case .devices: DeviceSettingsView()
         case .certificates: CertificatesView()
+        case .environment: EnvironmentView()
         case .settings: SettingsView()
         }
     }
@@ -285,6 +292,8 @@ struct CardTitle: View {
 struct ErrorSheet: View {
     let message: String
     let detail: String?
+    var actionTitle: String? = nil
+    var action: () -> Void = {}
     let dismiss: () -> Void
 
     /// **Open** (build 25, QA L-18). The sheet exists to show a `radiusd -CX` dump; collapsing
@@ -331,10 +340,19 @@ struct ErrorSheet: View {
                     CopyButton("Copy details", value: "\(message)\n\n\(detail)", bordered: true)
                 }
                 Spacer(minLength: 0)
-                Button("OK", action: dismiss)
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.accent)
-                    .keyboardShortcut(.defaultAction)
+                if let actionTitle {
+                    // The fix is the default: pressing Return goes and does it.
+                    Button("OK", action: dismiss).buttonStyle(.bordered)
+                    Button(actionTitle, action: action)
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.accent)
+                        .keyboardShortcut(.defaultAction)
+                } else {
+                    Button("OK", action: dismiss)
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.accent)
+                        .keyboardShortcut(.defaultAction)
+                }
             }
         }
         .controlSize(.small)

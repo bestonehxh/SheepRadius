@@ -13,6 +13,17 @@ nonisolated struct DirectoryUser: Sendable, Equatable, Identifiable {
     var id: String { dn }
     var username: String
     var displayName: String = ""
+    var email: String = ""
+    var mobile: String = ""
+    var telephoneNumber: String = ""
+    var title: String = ""
+    var department: String = ""
+    var employeeID: String = ""
+    var description: String = ""
+    /// **Every `UserAttribute` the directory returned**, keyed by its AD name (build 32). The
+    /// typed fields above are kept as the convenient spelling of five of them; this is what the
+    /// inspector's General / Address / Telephones / Organization sections read.
+    var attributes: [String: String] = [:]
     /// The full sign-in name a NAC can map as its account attribute. Unlike
     /// `sAMAccountName`, its suffix may differ between users in the same domain.
     var userPrincipalName: String = ""
@@ -24,6 +35,127 @@ nonisolated struct DirectoryUser: Sendable, Equatable, Identifiable {
     /// An object the app must not edit. This is decided per object, not per container: ordinary
     /// accounts in `CN=Users` are editable, while Administrator, Guest and krbtgt are not.
     var isReadOnly = false
+}
+
+extension DirectoryUser {
+    /// One catalogued attribute's value, `""` when the account has none.
+    func value(_ attribute: UserAttribute) -> String { attributes[attribute.name] ?? "" }
+}
+
+/// **The account attributes Active Directory Users and Computers shows** (build 32) — the
+/// General, Address, Telephones and Organization tabs — as one table both backends read and
+/// write through.
+///
+/// `name` is the AD attribute name, and it is the name in OpenLDAP as well wherever that is
+/// possible: `department`, `company`, `employeeID`, `wWWHomePage` and `ipPhone` are declared
+/// in the lab's own `sheepradius.schema` so a device configured to read `department` gets the
+/// same answer from either directory. Two differ only in spelling: core.schema's `street` is
+/// AD's `streetAddress` (the alias is the same attribute), which is why `openLDAPName` exists.
+///
+/// Display name, username, UPN and the password are not in here — they are identities, with
+/// rules of their own, and the inspector keeps their fields above these sections.
+nonisolated struct UserAttribute: Sendable, Hashable, Identifiable {
+    enum Section: String, Sendable, CaseIterable {
+        case general = "General", address = "Address", telephones = "Telephones", organization = "Organization"
+    }
+    /// `telephone` and `ascii` are the syntaxes slapd enforces and AD does not: a telephone
+    /// number is a PrintableString there and `mail` an IA5String, so a Thai character is an
+    /// "invalid syntax" from ldapmodify. Refused here, in words, in both backends — found by
+    /// the live suite's round trip (build 32).
+    enum Kind: Sendable { case text, telephone, ascii, countryCode, distinguishedName }
+
+    let name: String
+    let label: String
+    let section: Section
+    let maxLength: Int
+    var openLDAPName: String? = nil
+    var kind: Kind = .text
+    /// OpenLDAP's `sn` is MUST on `person`: clearing it would fail the modify, so an empty
+    /// value is written as the username instead — the same thing the seed puts there.
+    var requiredInOpenLDAP = false
+
+    var id: String { name }
+    /// A field that can only hold ASCII: the inspector switches the keyboard to a Roman input
+    /// source while it has focus and drops anything else that is pasted in.
+    var isASCIIOnly: Bool { kind == .telephone || kind == .ascii || kind == .countryCode }
+    /// The name to ask slapd for and to modify there.
+    var ldapName: String { openLDAPName ?? name }
+
+    static let catalog: [UserAttribute] = [
+        // General
+        .init(name: "givenName", label: "First name", section: .general, maxLength: 64),
+        .init(name: "initials", label: "Initials", section: .general, maxLength: 6),
+        .init(name: "sn", label: "Last name", section: .general, maxLength: 64,
+              requiredInOpenLDAP: true),
+        .init(name: "description", label: "Description", section: .general, maxLength: 1024),
+        .init(name: "physicalDeliveryOfficeName", label: "Office", section: .general, maxLength: 128),
+        .init(name: "telephoneNumber", label: "Telephone number", section: .general, maxLength: 64, kind: .telephone),
+        .init(name: "mail", label: "E-mail", section: .general, maxLength: 256, kind: .ascii),
+        .init(name: "wWWHomePage", label: "Web page", section: .general, maxLength: 2048),
+        // Address
+        .init(name: "streetAddress", label: "Street", section: .address, maxLength: 1024, openLDAPName: "street"),
+        .init(name: "postOfficeBox", label: "P.O. Box", section: .address, maxLength: 40),
+        .init(name: "l", label: "City", section: .address, maxLength: 128),
+        .init(name: "st", label: "State/province", section: .address, maxLength: 128),
+        .init(name: "postalCode", label: "ZIP/Postal Code", section: .address, maxLength: 40),
+        // Only `c` is written. ADUC also keeps `co` (the name) and `countryCode` (ISO 3166
+        // numeric) beside it; a NAC mapping reads `c`, which is what matters here.
+        .init(name: "c", label: "Country/region (ISO code)", section: .address, maxLength: 2, kind: .countryCode),
+        // Telephones
+        .init(name: "homePhone", label: "Home", section: .telephones, maxLength: 64, kind: .telephone),
+        .init(name: "pager", label: "Pager", section: .telephones, maxLength: 64, kind: .telephone),
+        .init(name: "mobile", label: "Mobile", section: .telephones, maxLength: 64, kind: .telephone),
+        .init(name: "facsimileTelephoneNumber", label: "Fax", section: .telephones, maxLength: 64, kind: .telephone),
+        .init(name: "ipPhone", label: "IP phone", section: .telephones, maxLength: 64, kind: .telephone),
+        .init(name: "info", label: "Notes", section: .telephones, maxLength: 1024),
+        // Organization
+        .init(name: "title", label: "Job Title", section: .organization, maxLength: 128),
+        .init(name: "department", label: "Department", section: .organization, maxLength: 64),
+        .init(name: "company", label: "Company", section: .organization, maxLength: 64),
+        .init(name: "employeeID", label: "Employee ID", section: .organization, maxLength: 16),
+        .init(name: "manager", label: "Manager", section: .organization, maxLength: 1024, kind: .distinguishedName),
+    ]
+
+    static func named(_ name: String) -> UserAttribute? {
+        catalog.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    static func section(_ section: Section) -> [UserAttribute] { catalog.filter { $0.section == section } }
+
+    /// Reads every catalogued attribute out of one LDIF record, keyed by its AD name.
+    static func values(in record: [String: [String]], openLDAP: Bool) -> [String: String] {
+        var out: [String: String] = [:]
+        for attribute in catalog {
+            let key = openLDAP ? attribute.ldapName : attribute.name
+            if let value = ADLDIF.first(record, key), !value.isEmpty { out[attribute.name] = value }
+        }
+        return out
+    }
+
+    /// What is wrong with `value` for this attribute, or nil. Checked before either backend is
+    /// asked, so both refuse the same things in the same words.
+    func problem(_ value: String) -> String? {
+        if value.isEmpty { return nil }
+        if value.count > maxLength { return "\(label) can be at most \(maxLength) characters." }
+        if value.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" }) {
+            return "\(label) cannot contain a line break."
+        }
+        switch kind {
+        case .text: return nil
+        case .telephone:
+            let allowed = Set("0123456789 +()-./,:?=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'")
+            return value.allSatisfy { allowed.contains($0) }
+                ? nil : "\(label) can hold digits, letters, spaces and + ( ) - . / only."
+        case .ascii:
+            return value.unicodeScalars.allSatisfy { $0.isASCII }
+                ? nil : "\(label) must be plain ASCII — LDAP stores it as IA5String."
+        case .countryCode:
+            let letters = value.unicodeScalars.allSatisfy { ("A"..."Z").contains($0) || ("a"..."z").contains($0) }
+            return value.count == 2 && letters ? nil : "Country/region is a two-letter ISO code, such as TH or US."
+        case .distinguishedName:
+            return value.contains("=") ? nil : "Manager has to be an account in the directory."
+        }
+    }
 }
 
 nonisolated struct DirectoryGroup: Sendable, Equatable, Identifiable {
@@ -252,6 +384,7 @@ protocol DirectoryProvider: Sendable {
     func createUser(_ username: String, displayName: String, ou: String, password: String) async throws
     func setPassword(_ username: String, to password: String) async throws
     func setDisplayName(_ username: String, to displayName: String) async throws
+    func setUserAttribute(_ username: String, attribute: String, value: String) async throws
     func setUserPrincipalName(_ username: String, to userPrincipalName: String) async throws
     func setEnabled(_ username: String, to enabled: Bool) async throws
     func moveUser(_ username: String, toOU ou: String) async throws
@@ -879,9 +1012,13 @@ nonisolated enum ADDirectoryCommands {
         ["samba-tool", "ou", "create", dn(forOU: path, baseDN: baseDN)]
     }
     static func deleteOU(_ path: String, baseDN: String) -> [String] {
+        // Users are relocated first by the executor, but child OUs still need Samba's
+        // recursive-delete flag or deleting a parent leaves the operation refused.
         ["samba-tool", "ou", "delete", dn(forOU: path, baseDN: baseDN), "--force-subtree-delete"]
     }
-    /// Samba has a dedicated `ou rename` command. `ou move --new-name` is not supported.
+    /// Samba has a dedicated `ou rename` command. `ou move --new-name` looks plausible but is
+    /// not a supported spelling, so it can report success at the UI layer while leaving the
+    /// directory object unchanged on the Samba versions shipped in the AD image.
     static func renameOU(_ path: String, to newLeaf: String, baseDN: String) -> [String] {
         let parent = OUPath.parent(path) ?? ""
         let newPath = parent.isEmpty ? newLeaf : parent + "/" + newLeaf
@@ -898,6 +1035,9 @@ nonisolated enum ADDirectoryCommands {
          "(|(objectClass=user)(objectClass=group)(objectClass=organizationalUnit))",
          "dn", "objectClass", "sAMAccountName", "displayName", "description",
          "userPrincipalName", "userAccountControl", "member", "memberOf"]
+            // Build 32: every catalogued attribute, or an edit saved in the inspector reads
+            // back empty — ldbsearch returns only what it is asked for.
+            + UserAttribute.catalog.map(\.name).filter { $0 != "description" }
     }
 
     // MARK: Passwords, which never appear in an argument vector
@@ -1044,6 +1184,7 @@ nonisolated enum OpenLDAPDirectoryCommands {
          "(|(objectClass=inetOrgPerson)(objectClass=groupOfNames)(objectClass=organizationalUnit))",
          "dn", "objectClass", "uid", "cn", "displayName", "userPrincipalName",
          "description", "member", "memberOf"]
+            + UserAttribute.catalog.map(\.ldapName).filter { $0 != "description" }
     }
 
     static func dn(forOU path: String, suffix: String) -> String {
@@ -1122,10 +1263,13 @@ nonisolated enum OpenLDAPDirectoryCommands {
     }
 
     /// `ldapmodify` payload for replacing one attribute.
+    /// An empty `value` clears the attribute: `replace:` with no value line removes every
+    /// value (RFC 4511 §4.6), where `attr:` with an empty value would be an attempt to *store*
+    /// an empty string, which most syntaxes refuse.
     static func replaceLDIF(dn: String, attribute: String, value: String) -> String {
         LDIFValue.row("dn", dn)
             + "changetype: modify\nreplace: \(attribute)\n"
-            + LDIFValue.row(attribute, value)
+            + (value.isEmpty ? "" : LDIFValue.row(attribute, value))
             + "\n"
     }
 
@@ -1889,6 +2033,7 @@ nonisolated struct OfflineDirectory: DirectoryProvider {
     func createUser(_ username: String, displayName: String, ou: String, password: String) async throws { throw stopped }
     func setPassword(_ username: String, to password: String) async throws { throw stopped }
     func setDisplayName(_ username: String, to displayName: String) async throws { throw stopped }
+    func setUserAttribute(_ username: String, attribute: String, value: String) async throws { throw stopped }
     func setUserPrincipalName(_ username: String, to userPrincipalName: String) async throws { throw stopped }
     func setEnabled(_ username: String, to enabled: Bool) async throws { throw stopped }
     func moveUser(_ username: String, toOU ou: String) async throws { throw stopped }

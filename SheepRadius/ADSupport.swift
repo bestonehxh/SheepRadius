@@ -310,19 +310,25 @@ nonisolated struct ADUserFacts: Sendable, Equatable {
 
     /// AD stores these as 100-nanosecond ticks since 1601-01-01 UTC. 0 means "never", which is
     /// what a freshly created account has and what the UI must not print as 1601.
+    /// One formatter, not one per user per refresh. DateFormatter is thread-safe for
+    /// formatting on every macOS this app runs on.
+    /// en_US_POSIX and an explicit Gregorian calendar, or this Mac's Thai locale renders
+    /// 2026 as 2569 (the Buddhist era) — caught by the unit test, not by a person.
+    nonisolated(unsafe) private static let fileTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter
+    }()
+
     static func readableFileTime(_ raw: String) -> String {
         guard let ticks = Int64(raw.trimmingCharacters(in: .whitespaces)), ticks > 0 else { return "never" }
         // 11644473600 = seconds between 1601-01-01 and 1970-01-01.
         let seconds = Double(ticks) / 10_000_000 - 11_644_473_600
         guard seconds > 0 else { return "never" }
-        let formatter = DateFormatter()
-        // en_US_POSIX and an explicit Gregorian calendar, or this Mac's Thai locale renders
-        // 2026 as 2569 (the Buddhist era) — caught by the unit test, not by a person.
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        return formatter.string(from: Date(timeIntervalSince1970: seconds)) + " UTC"
+        return fileTimeFormatter.string(from: Date(timeIntervalSince1970: seconds)) + " UTC"
     }
 }
 
@@ -350,7 +356,7 @@ nonisolated struct ADAuthRecord: Sendable, Equatable {
     /// The domain that name belongs to, same rule.
     var domain: String
     /// The `user [DOMAIN]\[name]` pair exactly as the client sent it. `NO_SUCH_USER` is only
-    /// comprehensible with this: `EXAMPLE\external.user` is a *different domain's* account.
+    /// comprehensible with this: `ZENITHCOMP\natchanon.k` is a *different domain's* account.
     var rawUser: String
     var rawDomain: String
     /// The client's own name for itself. `(null)` and the `\\`-prefixed spelling are cleaned up
@@ -594,7 +600,7 @@ nonisolated enum ADAuthAudit {
     /// the product settles it; so does one that reports **Windows**, in the other direction —
     /// a notebook is never an iMaster node whatever it is called. Only then does the node-name
     /// heuristic apply, and it is a heuristic: those are the fixed role names iMaster's own
-    /// nodes join with (verified against an NCE-Campus lab deployment on
+    /// nodes join with (verified against the owner's NCE-Campus at 10.200.34.24 on
     /// 18 Sep 2026, where all three joined with **no** `operatingSystem` attribute at all,
     /// which is the one thing that distinguishes them from a Windows PC).
     static func looksLikeNCE(_ computer: ADComputer) -> Bool {
@@ -610,12 +616,12 @@ nonisolated enum ADAuthAudit {
     /// stripped (`SERVICE1` → `service`).
     static let nceNodeRoles: Set<String> = ["omp", "service", "database", "databackup", "manager"]
 
-    /// What `-demoADEvents 1` replays. Sanitised lines from a lab domain controller, with
-    /// the SIDs shortened.
+    /// What `-demoADEvents 1` replays. Real lines from the owner's domain controller on
+    /// 18 Sep 2026, with the SIDs shortened and nothing else changed.
     ///
     /// They exist so that Status ▸ Recent authentications can be seen — and screenshotted —
     /// without a domain controller running, which on the day this was written was the only way
-    /// to show what the card would look like without rebuilding the image. The hook
+    /// to show the owner what the card would look like once he rebuilt the image. The hook
     /// feeds them through `ADController.ingestFollowedLog`, so it exercises the real path
     /// (follow → parse → coalesce → publish) rather than pretending to.
     ///
@@ -623,14 +629,14 @@ nonisolated enum ADAuthAudit {
     /// the code it is testing cannot notice the fixture being wrong.
     static let demoLines = [
         #"Auth: [LDAP,simple bind] user [LABSHEEP]\[CN=Administrator,CN=Users,DC=lab,DC=sheep] at [Fri, 18 Sep 2026 08:34:53.486099 UTC] with [Plaintext] status [NT_STATUS_OK] workstation [DC1] remote host [ipv4:192.168.64.1:60676] became [LABSHEEP]\[Administrator] [S-1-5-21-1-2-3-500]. local host [ipv4:192.168.64.2:389]"#,
-        #"Auth: [SamLogon,interactive] user [LAB.SHEEP]\[Administrator] at [Fri, 18 Sep 2026 08:38:04.026803 UTC] with [Supplied-NT-Hash] status [NT_STATUS_OK] workstation [\\\\FILESERVER] remote host [ipv4:192.168.64.1:60306] became [LABSHEEP]\[Administrator] [S-1-5-21-1-2-3-500]"#,
+        #"Auth: [SamLogon,interactive] user [LAB.SHEEP]\[Administrator] at [Fri, 18 Sep 2026 08:38:04.026803 UTC] with [Supplied-NT-Hash] status [NT_STATUS_OK] workstation [\\\\DATABACKUP] remote host [ipv4:192.168.64.1:60306] became [LABSHEEP]\[Administrator] [S-1-5-21-1-2-3-500]"#,
         // Three in a row from the same node — what coalescing is for.
         #"Auth: [SamLogon,network] user [lab.sheep]\[alice] at [Fri, 18 Sep 2026 09:01:46.975428 UTC] with [MSCHAPv2] status [NT_STATUS_WRONG_PASSWORD] workstation [\\\\OMP] remote host [ipv4:192.168.64.1:60300] mapped to [LABSHEEP]\[alice]. local host [ipv4:192.168.64.2:49153]"#,
         #"Auth: [SamLogon,network] user [lab.sheep]\[alice] at [Fri, 18 Sep 2026 09:01:51.100000 UTC] with [MSCHAPv2] status [NT_STATUS_WRONG_PASSWORD] workstation [\\\\OMP] remote host [ipv4:192.168.64.1:60300] mapped to [LABSHEEP]\[alice]. local host [ipv4:192.168.64.2:49153]"#,
         #"Auth: [SamLogon,network] user [lab.sheep]\[alice] at [Fri, 18 Sep 2026 09:01:58.400000 UTC] with [MSCHAPv2] status [NT_STATUS_WRONG_PASSWORD] workstation [\\\\OMP] remote host [ipv4:192.168.64.1:60300] mapped to [LABSHEEP]\[alice]. local host [ipv4:192.168.64.2:49153]"#,
         #"Auth: [SamLogon,network] user [lab.sheep]\[alice] at [Fri, 18 Sep 2026 09:02:10.550000 UTC] with [MSCHAPv2] status [NT_STATUS_OK] workstation [\\\\OMP] remote host [ipv4:192.168.64.1:60300] became [LABSHEEP]\[alice]. local host [ipv4:192.168.64.2:49153]"#,
-        #"Auth: [NETLOGON,ServerAuthenticate] user [LABSHEEP]\[CLIENT-T14$] at [Fri, 18 Sep 2026 09:03:20.010000 UTC] with [HMAC-SHA256] status [NT_STATUS_OK] workstation [(null)] remote host [ipv4:192.168.64.1:61001]"#,
-        #"Auth: [SamLogon,interactive] user [EXAMPLE]\[external.user] at [Fri, 18 Sep 2026 09:03:27.100000 UTC] with [Supplied-NT-Hash] status [NT_STATUS_NO_SUCH_USER] workstation [CLIENT-T14] remote host [ipv4:192.168.64.1:61000]"#,
+        #"Auth: [NETLOGON,ServerAuthenticate] user [LABSHEEP]\[NATCHANON-T14$] at [Fri, 18 Sep 2026 09:03:20.010000 UTC] with [HMAC-SHA256] status [NT_STATUS_OK] workstation [(null)] remote host [ipv4:192.168.64.1:61001]"#,
+        #"Auth: [SamLogon,interactive] user [ZENITHCOMP]\[natchanon.k] at [Fri, 18 Sep 2026 09:03:27.100000 UTC] with [Supplied-NT-Hash] status [NT_STATUS_NO_SUCH_USER] workstation [NATCHANON-T14] remote host [ipv4:192.168.64.1:61000]"#,
     ]
 }
 

@@ -88,6 +88,14 @@ nonisolated enum DirectorySnapshotParser {
                 snapshot.users.append(DirectoryUser(
                     username: name,
                     displayName: ADLDIF.first(record, "displayName") ?? "",
+                    email: ADLDIF.first(record, "mail") ?? "",
+                    mobile: ADLDIF.first(record, "mobile") ?? "",
+                    telephoneNumber: ADLDIF.first(record, "telephoneNumber") ?? "",
+                    title: ADLDIF.first(record, "title") ?? "",
+                    department: ADLDIF.first(record, "department") ?? "",
+                    employeeID: ADLDIF.first(record, "employeeID") ?? "",
+                    description: ADLDIF.first(record, "description") ?? "",
+                    attributes: UserAttribute.values(in: record, openLDAP: false),
                     userPrincipalName: ADLDIF.first(record, "userPrincipalName") ?? "",
                     ou: ADDirectoryCommands.userOU(fromDN: dn, baseDN: baseDN),
                     groups: ADLDIF.all(record, "memberOf").map(rdnValue(of:)).sorted(),
@@ -127,10 +135,14 @@ nonisolated enum DirectorySnapshotParser {
                 let members = ADLDIF.all(record, "member")
                     .filter { $0.lowercased().hasPrefix("uid=") }
                     .map(rdnValue(of:))
+                // `netusers` is generated — every enabled account, by definition — so it is a
+                // built-in: listed with the directory's own groups, usable in a rule, and never
+                // a checkbox in a user's Member of (build 32; ticking it wrote a duplicate).
                 snapshot.groups.append(DirectoryGroup(
                     name: name,
                     description: ADLDIF.first(record, "description") ?? "",
-                    members: members, dn: dn))
+                    members: members, dn: dn,
+                    isReadOnly: name.caseInsensitiveCompare(LabGroup.everyoneName) == .orderedSame))
                 continue
             }
             if kinds.contains("inetorgperson") {
@@ -139,6 +151,14 @@ nonisolated enum DirectorySnapshotParser {
                 snapshot.users.append(DirectoryUser(
                     username: name,
                     displayName: ADLDIF.first(record, "displayName") ?? "",
+                    email: ADLDIF.first(record, "mail") ?? "",
+                    mobile: ADLDIF.first(record, "mobile") ?? "",
+                    telephoneNumber: ADLDIF.first(record, "telephoneNumber") ?? "",
+                    title: ADLDIF.first(record, "title") ?? "",
+                    department: ADLDIF.first(record, "department") ?? "",
+                    employeeID: ADLDIF.first(record, "employeeID") ?? "",
+                    description: ADLDIF.first(record, "description") ?? "",
+                    attributes: UserAttribute.values(in: record, openLDAP: true),
                     userPrincipalName: ADLDIF.first(record, "userPrincipalName") ?? "",
                     ou: ADDirectoryCommands.userOU(fromDN: dn, baseDN: suffix),
                     // `netusers` is generated, not a group anybody joined — it is every
@@ -292,6 +312,21 @@ actor ADDirectory: DirectoryProvider {
             ? LDIFValue.row("dn", dn) + "changetype: modify\ndelete: displayName\n"
             : LDIFValue.row("dn", dn) + "changetype: modify\nreplace: displayName\n"
                 + LDIFValue.row("displayName", displayName)
+        _ = try await exec(["ldbmodify", "-H", ADCommands.sambaDatabase], input: ldif)
+    }
+
+    func setUserAttribute(_ username: String, attribute: String, value: String) async throws {
+        guard let entry = UserAttribute.named(attribute) else {
+            throw DirectoryError.refused("Unsupported user attribute.")
+        }
+        if let problem = entry.problem(value) { throw DirectoryError.refused(problem) }
+        let attribute = entry.name
+        let value = entry.kind == .countryCode ? value.uppercased() : value
+        let dn = try await dn(ofUser: username)
+        let ldif = value.isEmpty
+            ? LDIFValue.row("dn", dn) + "changetype: modify\ndelete: \(attribute)\n"
+            : LDIFValue.row("dn", dn) + "changetype: modify\nreplace: \(attribute)\n"
+                + LDIFValue.row(attribute, value)
         _ = try await exec(["ldbmodify", "-H", ADCommands.sambaDatabase], input: ldif)
     }
 
@@ -579,6 +614,20 @@ actor OpenLDAPDirectory: DirectoryProvider {
         try await bound(tools.ldapmodify, [], input: OpenLDAPDirectoryCommands.replaceLDIF(
             dn: dn, attribute: "displayName", value: displayName.isEmpty ? username : displayName),
                         subject: username)
+    }
+
+    func setUserAttribute(_ username: String, attribute: String, value: String) async throws {
+        guard let entry = UserAttribute.named(attribute) else {
+            throw DirectoryError.refused("Unsupported user attribute.")
+        }
+        if let problem = entry.problem(value) { throw DirectoryError.refused(problem) }
+        var value = entry.kind == .countryCode ? value.uppercased() : value
+        if value.isEmpty, entry.requiredInOpenLDAP { value = username }
+        let dn = try await dn(ofUser: username)
+        // Every account carries `sheepRadiusAccount` — the seed and `addUserLDIF` both write
+        // it — which is the class `department`, `company`, `info`, `c` and the rest hang off.
+        let ldif = OpenLDAPDirectoryCommands.replaceLDIF(dn: dn, attribute: entry.ldapName, value: value)
+        try await bound(tools.ldapmodify, [], input: ldif, subject: username)
     }
 
     func setUserPrincipalName(_ username: String, to userPrincipalName: String) async throws {

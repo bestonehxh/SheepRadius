@@ -12,13 +12,21 @@ struct LogLine: Identifiable, Sendable {
     /// produces. The Log pane's `LazyVStack` only ever builds the rows that are on screen, so
     /// asking there costs ~40 rows × 4 searches per redraw and nothing at all when the pane is
     /// closed. Measured both ways; see HANDOFF.
-    enum Kind: Sendable { case plain, accept, reject, note }
+    enum Kind: Sendable { case plain, accept, reject, note, request, quiet }
 
     let id: Int
     let text: String
+    /// When the app received it (build 32). radiusd at `-x` prints no clock at all, so this is
+    /// the only time a RADIUS line has; one `Date` per drained batch, not per line.
+    var time: Date? = nil
 
     var kind: Kind {
         if text.hasPrefix("——") { return .note }
+        // Build 32: the start of a request, and the chatter between requests. Checked before
+        // the verdicts so a header is never taken for one ("Sent Access-Reject" is a verdict).
+        if text.contains("Received Access-Request") || text.contains("Received Accounting-Request")
+            || text.contains(" ACCEPT from IP=") { return .request }
+        if LogPresentation.isQuiet(text) { return .quiet }
         if text.contains("Login OK") || text.contains("Access-Accept") { return .accept }
         // The domain controller's own verdicts, same rule as radiusd's: `NT_STATUS_OK` and
         // nothing else is a success. The OK test must come first — every failure constant also
@@ -26,7 +34,10 @@ struct LogLine: Identifiable, Sendable {
         if text.contains("NT_STATUS_OK") { return .accept }
         if text.contains("NT_STATUS_") { return .reject }
         if text.contains("Login incorrect") || text.contains("Access-Reject")
-            || text.contains("Error") || text.contains("unknown client") { return .reject }
+            || text.contains("Error") || text.contains("unknown client")
+            || text.contains("Dropping packet without response")
+            || text.contains(" RESULT tag=97 err=") && !text.contains(" RESULT tag=97 err=0 ") { return .reject }
+        if text.contains(" RESULT tag=97 err=0 ") { return .accept }
         return .plain
     }
 }
@@ -247,8 +258,9 @@ final class ServerProcess: ObservableObject {
     /// per line — including the sidebar's `ServerRow`, whether or not the Log pane was open.
     private func append(_ lines: [String]) {
         var next = log
+        let now = Date()
         for text in lines {
-            next.append(LogLine(id: nextLineID, text: text))
+            next.append(LogLine(id: nextLineID, text: text, time: now))
             nextLineID += 1
         }
         if next.count > maxLines { next.removeFirst(next.count - maxLines) }

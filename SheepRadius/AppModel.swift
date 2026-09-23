@@ -4,6 +4,12 @@ import Foundation
 /// The thirteen sidebar rows of build 18, minus the two server switches: five groups, no
 /// duplicated page. Certificates is **one** pane (CA + RADIUS leaf + directory leaf) where
 /// build 17 had the same CA card under RADIUS and again under Directory.
+/// The fix an error sheet can offer as a button beside OK.
+struct ErrorAction {
+    let title: String
+    let run: @MainActor () -> Void
+}
+
 enum MainPane: String, CaseIterable {
     // Overview
     case status, test, log
@@ -12,7 +18,7 @@ enum MainPane: String, CaseIterable {
     // RADIUS
     case clients, policy, radiusServer
     // App
-    case certificates, settings
+    case certificates, environment, settings
 
     /// `-demoPane` accepts the current ids and the ones earlier builds used, so screenshot
     /// scripts and muscle memory keep working after each regroup. Build 18 merged the two
@@ -41,6 +47,9 @@ enum MainPane: String, CaseIterable {
 nonisolated enum AuthSource: Sendable, Equatable {
     case radius
     case activeDirectory
+    /// A simple bind against the bundled slapd (build 32) — a NAC's bind account, a switch
+    /// checking a login over LDAP, the Test pane.
+    case ldap
 
     /// The badge in Status ▸ Recent authentications. RADIUS rows are unbadged — they were the
     /// only kind until build 15 and the pane would be all badge otherwise.
@@ -48,6 +57,7 @@ nonisolated enum AuthSource: Sendable, Equatable {
         switch self {
         case .radius: nil
         case .activeDirectory: "AD"
+        case .ldap: "LDAP"
         }
     }
 }
@@ -77,11 +87,105 @@ nonisolated struct AuthEvent: Identifiable {
     var outerIdentity: String?
 }
 
+/// **LDAP binds, out of slapd's own stats log** (build 32, owner: "การ authen อะไรต้องเห็นหมด").
+///
+/// slapd runs with `-d 256`, which prints every connection, every BIND and every RESULT —
+/// the verdict was always in the Log pane and never reached Recent authentications. A bind
+/// is three lines on one connection, so this keeps the little state needed to join them:
+///
+///     conn=1004 fd=14 ACCEPT from IP=192.168.1.20:51522 (IP=0.0.0.0:389)
+///     conn=1004 op=0 BIND dn="uid=alice,ou=IT,dc=lab,dc=sheep" method=128
+///     conn=1004 op=0 RESULT tag=97 err=49 qtime=0.000010 etime=0.000131 text=
+///
+/// `tag=97` is a BindResponse. An anonymous bind (empty DN) is not an authentication and is
+/// skipped. So is **this app's own** administrator bind from this Mac — the directory panes
+/// read with it every 30 s, and a feed full of those would hide the logins that matter; the
+/// same DN from anywhere else (a NAC's bind account) is shown.
+nonisolated struct SlapdBindTracker: Sendable {
+    let adminDN: String
+    private var peers: [String: String] = [:]
+    private var binds: [String: String] = [:]
+
+    init(adminDN: String) { self.adminDN = adminDN }
+
+    mutating func ingest(_ line: String, now: Date = Date()) -> AuthEvent? {
+        guard let connRange = line.range(of: "conn=") else { return nil }
+        let text = line[connRange.lowerBound...]
+        let conn = String(text.prefix { $0 != " " })
+        if let from = text.range(of: " ACCEPT from IP=") {
+            let rest = text[from.upperBound...]
+            let address = rest.prefix { $0 != " " }
+            // `IP=192.168.1.20:51522` → the host. IPv6 comes as `[::1]:port`.
+            var host = String(address)
+            if let colon = host.lastIndex(of: ":") { host = String(host[..<colon]) }
+            peers[conn] = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            if peers.count > 512 { peers.removeAll() }
+            return nil
+        }
+        if text.hasSuffix(" closed") || text.contains(" closed (") {
+            peers[conn] = nil
+            binds = binds.filter { !$0.key.hasPrefix(conn + " ") }
+            return nil
+        }
+        guard let opRange = text.range(of: " op=") else { return nil }
+        let op = conn + " " + String(text[opRange.upperBound...].prefix { $0 != " " })
+        if let bind = text.range(of: " BIND dn=\""), text.contains(" method=") {
+            let rest = text[bind.upperBound...]
+            if let close = rest.firstIndex(of: "\"") { binds[op] = String(rest[..<close]) }
+            if binds.count > 512 { binds.removeAll() }
+            return nil
+        }
+        guard text.contains(" RESULT tag=97 "), let dn = binds.removeValue(forKey: op) else { return nil }
+        guard !dn.isEmpty else { return nil }
+        let client = peers[conn] ?? "?"
+        let local = client == "127.0.0.1" || client == "::1" || client == "?"
+        if local, dn.caseInsensitiveCompare(adminDN) == .orderedSame { return nil }
+        let code = Self.value(of: "err", in: text) ?? "?"
+        var detail = code == "0" ? "simple bind" : Self.meaning(of: code)
+        if let reason = Self.value(of: "text", in: text), !reason.isEmpty, code != "0" {
+            detail += " · " + reason
+        }
+        return AuthEvent(id: 0, time: now, accepted: code == "0", username: Self.name(in: dn),
+                         client: client, detail: detail, source: .ldap)
+    }
+
+    /// `uid=alice,ou=IT,dc=lab` → `alice`; a DN with no `uid=`/`cn=` first is kept whole.
+    static func name(in dn: String) -> String {
+        guard let first = dn.split(separator: ",").first, let eq = first.firstIndex(of: "=") else { return dn }
+        let key = first[..<eq].lowercased()
+        return key == "uid" || key == "cn" ? String(first[first.index(after: eq)...]) : dn
+    }
+
+    static func meaning(of code: String) -> String {
+        switch code {
+        case "49": "invalid credentials (49)"
+        case "48": "inappropriate authentication (48)"
+        case "50": "insufficient access (50)"
+        case "53": "unwilling to perform (53)"
+        case "13": "confidentiality required (13)"
+        case "34": "invalid DN syntax (34)"
+        default: "error \(code)"
+        }
+    }
+
+    private static func value(of key: String, in text: Substring) -> String? {
+        guard let r = text.range(of: " \(key)=") else { return nil }
+        let rest = text[r.upperBound...]
+        return key == "text" ? String(rest) : String(rest.prefix { $0 != " " })
+    }
+}
+
 /// Process-global state, same shape as SheepDrop/SheepTerm: one window, one model.
 final class AppModel: ObservableObject {
     static let shared = AppModel()
 
     @Published var mainPane = MainPane.status
+    /// Joins slapd's ACCEPT / BIND / RESULT lines into one event per bind. Its admin DN is
+    /// refreshed at every LDAP start, since the base DN can move between starts.
+    private var bindTracker = SlapdBindTracker(adminDN: "")
+    /// The Environment item a failed start (or the launch check) sent the person to. Drawn as
+    /// a highlighted reason at the top of that pane and cleared when the pane is left.
+    @Published var environmentFocus: EnvironmentItem?
     /// The user selected in the Users pane (and the group in Groups), **by name**.
     ///
     /// A name and not a UUID since build 17: the rows come from a directory snapshot now, and
@@ -100,6 +204,11 @@ final class AppModel: ObservableObject {
     /// behind a "Details" disclosure and never as the message, because a seventeen-line parser
     /// dump is not a sentence a person can act on.
     @Published var lastErrorDetail: String?
+    /// A button on the error sheet that goes and fixes it (build 32): "Set password…" rather
+    /// than an OK that leaves the person to find the field.
+    @Published var lastErrorAction: ErrorAction?
+    /// Directory ▸ Server opens the Administrator-password sheet when this goes true.
+    @Published var requestADPasswordEntry = false
     /// Status ▸ Recent authentications, **published at most 10 times a second**.
     ///
     /// Measured in build 12 and the app's single worst hot spot: `StatusView.body` builds the
@@ -284,6 +393,7 @@ final class AppModel: ObservableObject {
             applied.settings.directoryBackend = backend
         }
         radius.onLines = { [weak self] in self?.scanForAuth($0) }
+        ldap.onLines = { [weak self] in self?.scanForBinds($0) }
         ad.onError = { [weak self] message in self?.report(message) }
         ad.onAuth = { [weak self] in self?.ingestADAuth($0) }
         // `-demoADEvents 1` replays the lines captured from the owner's domain controller on
@@ -304,9 +414,8 @@ final class AppModel: ObservableObject {
             addressMonitor = AddressMonitor(current: previous)
             observeAddress(LocalNetwork.primaryIPv4() ?? "127.0.0.1", at: Date())
         }
-        if let pane = CommandLine.value(after: "-demoPane").flatMap(MainPane.named) {
-            mainPane = pane
-        }
+        let demoPane = CommandLine.value(after: "-demoPane").flatMap(MainPane.named)
+        if let demoPane { mainPane = demoPane }
         if let name = CommandLine.value(after: "-demoSelect") {
             selectedUser = name
             selectedGroup = name
@@ -316,6 +425,14 @@ final class AppModel: ObservableObject {
             // Before anything can try to bind a port.
             await self.reapOrphansAtLaunch()
             await self.ad.refreshPrerequisites()
+            // Anything the lab needs that is not installed: open where it is installed from.
+            // After `refreshPrerequisites`, so a missing DC image is known. A `-demoPane`
+            // screenshot keeps the pane it asked for.
+            if demoPane == nil,
+               let missing = self.tools.launchBlocker(backend: self.applied.settings.directoryBackend,
+                                                      imageBuilt: !self.ad.imageKnownMissing) {
+                self.openEnvironment(for: missing)
+            }
             if CommandLine.value(after: "-autoStart") == "1" { await self.startAll() }
             // After the servers, so the first snapshot is of a directory that is up.
             self.startWatchingDirectory()
@@ -1157,6 +1274,22 @@ final class AppModel: ObservableObject {
 
     private func startADLocked() async {
         guard !ad.isRunning else { return }
+        // Missing runtime first: a password is no use to a domain that cannot run at all.
+        if tools.containerTool == nil {
+            report("Samba AD cannot start: Apple's container tool is not installed. "
+                   + "Install it under App \u{25B8} Environment.")
+            openEnvironment(for: .container)
+            return
+        }
+        // **No password, no start — and say where it goes** (build 32, owner: "ไม่รู้เลยว่า
+        // ต้องไป set ที่ไหน"). Provisioning needs it and devices join with it. Checked before
+        // anything is started, so nothing has to be unwound.
+        if doc.settings.ad.administratorPassword.isEmpty {
+            report(ADSettings.missingPasswordMessage,
+                   action: ErrorAction(title: "Set password…") { [weak self] in self?.openADPasswordEntry() })
+            if !quietErrors { mainPane = .ldapServer }
+            return
+        }
         directoryStarting = true
         defer { directoryStarting = false }
         // Before the start, not after: provisioning a domain takes the best part of a minute
@@ -1183,6 +1316,10 @@ final class AppModel: ObservableObject {
         // upgraded lab.json is offered by the Directory panes with a report, not run silently
         // behind a Start button.
         await ad.start(applied.settings.ad)
+        if !ad.isRunning {
+            if tools.containerTool == nil { openEnvironment(for: .container) }
+            else if ad.imageKnownMissing { openEnvironment(for: .adImage) }
+        }
         // `-adSelfTest 1` runs the pane's own button once, right after the start. It is how
         // `./Tests/run.sh ad` gets at checks that live inside the app — a CLDAP ping and a
         // kinit are not things a shell script should be reimplementing beside them.
@@ -1408,6 +1545,7 @@ final class AppModel: ObservableObject {
         // reading off.
         guard let radiusd = tools.radiusd else {
             report(Toolchain.missingServerMessage(server: "RADIUS", binary: "radiusd"))
+            openEnvironment(for: .radius)
             return
         }
         if let refusal = await startDirectoryForRadius(origin: origin) {
@@ -1453,6 +1591,7 @@ final class AppModel: ObservableObject {
         guard !ldap.isRunning else { return }
         guard let slapd = tools.slapd else {
             report(Toolchain.missingServerMessage(server: "OpenLDAP", binary: "slapd"))
+            openEnvironment(for: .ldap)
             return
         }
         noteLogMode(.ldap)
@@ -1484,6 +1623,7 @@ final class AppModel: ObservableObject {
             // disk. Everything else it does is generating files nobody edits.
             if let note = try await self.env.rebuildLDAP(self.applied) { self.ldap.note("—— " + note) }
             let conf = self.env.ldap.appendingPathComponent("slapd.conf").path
+            self.bindTracker = SlapdBindTracker(adminDN: self.applied.settings.ldapAdminDN)
             // -d 256 = stats logging, and keeps slapd in the foreground.
             self.ldap.start(executable: slapd,
                             arguments: ["-f", conf, "-h", self.applied.settings.listenURLs().joined(separator: " "), "-d", "256"],
@@ -2162,14 +2302,35 @@ final class AppModel: ObservableObject {
     /// **Build 22**: while a directory pane is starting the directory by itself, the failure
     /// belongs in the pane — the person did not press anything, so a sheet in front of the
     /// window would be the app interrupting itself.
-    func report(_ message: String, detail: String? = nil) {
+    /// Sends the person to Environment with `item` highlighted. **Not** while a directory pane
+    /// is starting the directory by itself (`quietErrors`): nobody pressed anything, and the
+    /// pane shows the reason where its table would be.
+    func openEnvironment(for item: EnvironmentItem?) {
+        guard !quietErrors else { return }
+        environmentFocus = item
+        mainPane = .environment
+    }
+
+    func report(_ message: String, detail: String? = nil, action: ErrorAction? = nil) {
         if quietErrors {
             directoryStartProblem = message
             directoryStartDetail = detail
             return
         }
         lastErrorDetail = detail
+        lastErrorAction = action
         lastError = message
+    }
+
+    /// Directory ▸ Server with the Administrator-password sheet open. The sheet is asked for a
+    /// moment later so the error sheet this is usually called from has finished closing —
+    /// macOS will not present a second sheet over one that is still animating away.
+    func openADPasswordEntry() {
+        mainPane = .ldapServer
+        Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            requestADPasswordEntry = true
+        }
     }
 
     /// **Opening Users or Groups starts the directory** (build 22, owner's decision) — and
@@ -2196,6 +2357,8 @@ final class AppModel: ObservableObject {
     /// The Retry button, which is the only thing that clears a failed start.
     func retryDirectoryFromPane() async {
         pinDirectoryToOpenLDAP(origin: .usersPane)
+        // A press, so it goes where the missing piece is installed — like every start (build 32).
+        if let missing = directoryMissingItem { openEnvironment(for: missing); return }
         guard DirectoryPaneStart.onRetry(isLive: anyDirectoryIsLive,
                                          isStarting: directoryStarting || paneStartInFlight,
                                          isAvailable: directoryPaneIsAvailable) == .start
@@ -2215,6 +2378,16 @@ final class AppModel: ObservableObject {
         // `startLDAPLocked` returns early when the backend is switched off underneath it.
         if !directoryIsLive, directoryStartProblem == nil {
             directoryStartProblem = "\(directoryLabel) did not start."
+        }
+    }
+
+    /// What the directory a pane would start is missing, or nil — for the pane's own
+    /// "Open Environment" button (build 32).
+    var directoryMissingItem: EnvironmentItem? {
+        switch directoryBackendForPane {
+        case .openLDAP: tools.ldapReady ? nil : .ldap
+        case .activeDirectory:
+            tools.containerTool == nil ? .container : ad.imageKnownMissing ? .adImage : nil
         }
     }
 
@@ -2253,6 +2426,7 @@ final class AppModel: ObservableObject {
     func clearError() {
         lastError = nil
         lastErrorDetail = nil
+        lastErrorAction = nil
     }
 
     private func perform(_ work: @escaping () async throws -> Void) async {
@@ -2298,6 +2472,22 @@ final class AppModel: ObservableObject {
                 if pendingRules.count > 64 { pendingRules.removeAll() }
                 continue
             }
+            // **A request radiusd never answered is still an authentication somebody tried**
+            // (build 32). An unregistered NAS and a wrong shared secret are silence on the
+            // wire and, until now, silence here too — the two faults a new device most often
+            // has. Repeats of the same refusal fold into one row with a count.
+            if let refusal = Self.parseRadiusRefusal(line, id: nextEventID) {
+                if let previous = newest(), Self.coalesces(refusal, into: previous) {
+                    if fresh.isEmpty { eventStore[0].repeats += 1; eventStore[0].time = refusal.time }
+                    else { fresh[fresh.count - 1].repeats += 1; fresh[fresh.count - 1].time = refusal.time }
+                    eventsDirty = true
+                    continue
+                }
+                nextEventID += 1
+                if Self.authTracing { print(Self.traceLine(refusal)) }
+                fresh.append(refusal)
+                continue
+            }
             guard var event = Self.parseAuth(line, id: nextEventID) else { continue }
             if let number = event.request, let fired = pendingRules.removeValue(forKey: number) {
                 event.rules = fired
@@ -2320,6 +2510,7 @@ final class AppModel: ObservableObject {
                 continue
             }
             nextEventID += 1
+            if Self.authTracing { print(Self.traceLine(event)) }
             fresh.append(event)
         }
         guard !fresh.isEmpty else { return }
@@ -2328,6 +2519,32 @@ final class AppModel: ObservableObject {
         if eventStore.count > 500 { eventStore.removeLast(eventStore.count - 500) }
         eventsDirty = true
         scheduleEventFlush()
+    }
+
+    /// slapd's binds, into the same list (build 32). See `SlapdBindTracker`.
+    private func scanForBinds(_ lines: [String]) {
+        var fresh: [AuthEvent] = []
+        for line in lines {
+            guard var event = bindTracker.ingest(line) else { continue }
+            event = AuthEvent(id: nextEventID, time: event.time, accepted: event.accepted,
+                              username: event.username, client: event.client,
+                              detail: event.detail, source: .ldap)
+            if let previous = fresh.last ?? eventStore.first, Self.coalesces(event, into: previous) {
+                if fresh.isEmpty { eventStore[0].repeats += 1; eventStore[0].time = event.time }
+                else { fresh[fresh.count - 1].repeats += 1; fresh[fresh.count - 1].time = event.time }
+                eventsDirty = true
+                continue
+            }
+            nextEventID += 1
+            if Self.authTracing { print(Self.traceLine(event)) }
+            fresh.append(event)
+        }
+        if !fresh.isEmpty {
+            eventStore.insert(contentsOf: fresh.reversed(), at: 0)
+            if eventStore.count > 500 { eventStore.removeLast(eventStore.count - 500) }
+            eventsDirty = true
+        }
+        if eventsDirty { scheduleEventFlush() }
     }
 
     /// The domain controller's own `Auth:` lines, into the same list RADIUS writes to.
@@ -2374,7 +2591,7 @@ final class AppModel: ObservableObject {
             }
             nextEventID += 1
             if Self.authTracing {
-                print("[event] AD \(event.accepted ? "accept" : "reject") \(event.username) \(event.client) — \(event.detail)")
+                print(Self.traceLine(event))
             }
             fresh.append(event)
         }
@@ -2403,7 +2620,9 @@ final class AppModel: ObservableObject {
     /// running. Setting it here as well costs nothing and removes the assumption that the
     /// controller's own first trace line came first.
     private static let authTracing: Bool = {
-        let on = CommandLine.value(after: "-adTrace") == "1"
+        // `-eventTrace 1` (build 32): every row that joins Recent authentications, whichever
+        // server it came from — what the live suite checks "every login is visible" with.
+        let on = CommandLine.value(after: "-adTrace") == "1" || CommandLine.value(after: "-eventTrace") == "1"
         if on { setvbuf(stdout, nil, _IONBF, 0) }
         return on
     }()
@@ -2416,8 +2635,21 @@ final class AppModel: ObservableObject {
     /// starts a new row, so a real login is never swallowed by the noise around it — and the
     /// two feeds never merge, because a RADIUS row and an AD row are two different observations
     /// of a login and both are worth seeing.
+    nonisolated static func traceLine(_ event: AuthEvent) -> String {
+        let source = switch event.source {
+        case .radius: "RADIUS"
+        case .activeDirectory: "AD"
+        case .ldap: "LDAP"
+        }
+        return "[event] \(source) \(event.accepted ? "accept" : "reject") \(event.username) \(event.client) — \(event.detail)"
+    }
+
+    /// Identical consecutive refusals collapse into one row with a count: an AD bind every
+    /// thirty seconds, a NAS retrying a request radiusd will not answer, a NAC's bind account
+    /// with a stale password. Accepted RADIUS logins are never merged — each is a session.
     nonisolated static func coalesces(_ event: AuthEvent, into previous: AuthEvent) -> Bool {
-        event.source == .activeDirectory && previous.source == .activeDirectory
+        let mergeable = event.source != .radius || !event.accepted
+        return mergeable && event.source == previous.source
             && event.accepted == previous.accepted
             && event.username == previous.username
             && event.client == previous.client
@@ -2514,6 +2746,40 @@ final class AppModel: ObservableObject {
         return true
     }
 
+    /// The two ways radiusd refuses a request **without** answering it, both measured on
+    /// 3.2.10 at `-x`:
+    ///
+    ///     Ignoring request to auth address * port 1812 bound to server default from unknown client 192.168.1.36 port 56230 proto udp
+    ///     Dropping packet without response because of error: Received packet from 127.0.0.1 with invalid Message-Authenticator!  (Shared secret is incorrect.) (from client localhost)
+    ///
+    /// The user is not known — radiusd never decoded the request — so the row says "—".
+    nonisolated static func parseRadiusRefusal(_ line: String, id: Int, now: Date = Date()) -> AuthEvent? {
+        if let r = line.range(of: " from unknown client "), line.contains("Ignoring request to ") {
+            let address = line[r.upperBound...].prefix { $0 != " " }
+            return AuthEvent(id: id, time: now, accepted: false, username: "—", client: String(address),
+                             detail: "unknown client — no answer sent; add it under RADIUS \u{25B8} Clients")
+        }
+        guard let r = line.range(of: "Dropping packet without response because of error: ") else { return nil }
+        let reason = line[r.upperBound...]
+        var client = "?"
+        if let c = reason.range(of: "(from client ", options: .backwards) {
+            client = String(reason[c.upperBound...].prefix { $0 != ")" })
+        } else if let f = reason.range(of: " from ") {
+            client = String(reason[f.upperBound...].prefix { $0 != " " })
+        }
+        let detail: String
+        if reason.contains("Shared secret is incorrect") || reason.contains("invalid Message-Authenticator") {
+            detail = "wrong shared secret — no answer sent; it must match RADIUS \u{25B8} Clients"
+        } else if reason.contains("without Message-Authenticator") {
+            detail = "no Message-Authenticator — dropped (BlastRADIUS protection)"
+        } else {
+            var text = String(reason)
+            if let c = text.range(of: " (from client ", options: .backwards) { text = String(text[..<c.lowerBound]) }
+            detail = "dropped — " + text.trimmingCharacters(in: .whitespaces)
+        }
+        return AuthEvent(id: id, time: now, accepted: false, username: "—", client: client, detail: detail)
+    }
+
     nonisolated static func parseAuth(_ line: String, id: Int, now: Date = Date()) -> AuthEvent? {
         let accepted: Bool
         let verdict: Range<String.Index>
@@ -2533,6 +2799,13 @@ final class AppModel: ObservableObject {
         var detail: [String] = []
         let reason = rest[..<open.lowerBound].trimmingCharacters(in: CharacterSet(charactersIn: " ()"))
         if !reason.isEmpty { detail.append(reason) }
+        // **A PAP password is encrypted with the shared secret** (build 32, measured): with the
+        // wrong secret radiusd decrypts garbage and says the password does not match — and the
+        // NAS then throws the reply away, so the device sees silence. The server cannot tell
+        // the two apart; the row says both.
+        if reason.contains("Cleartext password does not match") {
+            detail.append("or the NAS's shared secret is wrong")
+        }
         if let cli = words.firstIndex(of: "cli"), words.indices.contains(cli + 1) { detail.append(String(words[cli + 1])) }
         let viaTunnel = tail.contains("via TLS tunnel")
         if viaTunnel { detail.append("inner tunnel") }

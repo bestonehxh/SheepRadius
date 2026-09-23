@@ -35,13 +35,14 @@ struct SidebarView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    sectionHeader("Servers")
+                    sectionHeader("Servers", top: 3)
                     // `detail` describes the *running* server, so it reads `applied` — what the
                     // processes were generated from — never the unsaved edits in `doc`.
                     // Availability is the other way round: starting commits `doc` first.
                     ServerRow(server: model.radius, name: "RADIUS",
                               detail: "udp \(model.applied.settings.authPort) · \(model.applied.settings.acctPort)",
                               available: model.tools.radiusReady,
+                              missing: .radius,
                               start: { await model.startRadius() })
                     if model.doc.settings.directoryBackend == .activeDirectory {
                         ADServerRow()
@@ -51,6 +52,7 @@ struct SidebarView: View {
                                   available: model.tools.ldapReady && model.doc.settings.ldapEnabled,
                                   starting: model.directoryStarting,
                                   pairedWithRadius: true,
+                                  missing: model.tools.ldapReady ? nil : .ldap,
                                   start: { await model.startLDAP() },
                                   stop: { await model.stopDirectoryFromSwitch() })
                     }
@@ -83,6 +85,7 @@ struct SidebarView: View {
                     sectionHeader("App")
                     group {
                         row(.certificates, "Certificates")
+                        row(.environment, "Environment")
                         row(.settings, "Settings")
                     }
                 }
@@ -117,7 +120,7 @@ struct SidebarView: View {
         }
     }
 
-    private func sectionHeader(_ name: String, unavailable: String? = nil) -> some View {
+    private func sectionHeader(_ name: String, unavailable: String? = nil, top: CGFloat = 14) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(name.uppercased())
                 .font(.system(size: 10.5, weight: .semibold))
@@ -132,7 +135,7 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18)
-        .padding(.top, 14)
+        .padding(.top, top)
         .padding(.bottom, 4)
     }
 }
@@ -162,6 +165,9 @@ struct ServerRow: View {
     /// This is the directory half of the pair, so it locks while radiusd runs. The RADIUS row
     /// itself is not paired with anything and leaves it false.
     var pairedWithRadius = false
+    /// What a click on the switch should open Environment on while `available` is false, or nil
+    /// when unavailable means something else (switched off under Directory ▸ Server).
+    var missing: EnvironmentItem? = nil
     let start: () async -> Void
     /// Off. The LDAP row passes its own, which goes through `ServerPair`.
     var stop: (() async -> Void)?
@@ -180,6 +186,7 @@ struct ServerRow: View {
                          available: available,
                          busy: starting,
                          lockedHint: lockedHint,
+                         onUnavailable: missing.map { item in { AppModel.shared.openEnvironment(for: item) } },
                          isOn: Binding(
                             get: { ServerPair.directorySwitchIsOn(directoryRunning: server.isRunning,
                                                                   directoryStarting: starting) },
@@ -221,10 +228,15 @@ struct SidebarServerRow: View {
     let available: Bool
     let busy: Bool
     var lockedHint: String?
+    /// **A switch over something missing is a way to the fix** (build 32, owner: "ถ้าเลือก
+    /// samba แล้วกดเปิดต้องเด้งไปตลอดสิ"). It still draws grey — it cannot start anything —
+    /// but a click opens Environment on the missing item instead of doing nothing at all.
+    var onUnavailable: (() -> Void)? = nil
     @Binding var isOn: Bool
 
     /// Unavailable and locked look the same on purpose: in both the switch is not a control.
     private var isLocked: Bool { !available || lockedHint != nil }
+    private var leadsToEnvironment: Bool { !available && lockedHint == nil && onUnavailable != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -253,6 +265,14 @@ struct SidebarServerRow: View {
                         .disabled(isLocked)
                         .allowsHitTesting(!isLocked)
                         .help(lockedHint ?? "")
+                        .overlay {
+                            if leadsToEnvironment {
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { onUnavailable?() }
+                                    .help("Not installed — opens Environment")
+                            }
+                        }
                 }
             }
             Text(detail)
@@ -327,13 +347,20 @@ struct SidebarBackendChoice: View {
             .disabled(isLocked)
             .allowsHitTesting(!isLocked)
             .help(lockedHint ?? "")
-            if let lockedHint {
-                Text(lockedHint)
-                    .font(.system(size: 10))
+            // **The space is always there** (build 32, owner: the menu moved every time a
+            // server started). The hint is one or two lines and appears only while something
+            // runs, so drawing it conditionally pushed every pane row below it down and back
+            // up again. A hidden two-line placeholder fixes the height at exactly what the
+            // longest hint takes, whether or not there is one.
+            ZStack(alignment: .topLeading) {
+                Text("A\nB").hidden()
+                Text(lockedHint ?? "")
                     .foregroundStyle(Theme.faintText)
                     .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+            .font(.system(size: 10))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityHidden(lockedHint == nil)
         }
         .padding(.horizontal, 16)
         .padding(.top, 1)

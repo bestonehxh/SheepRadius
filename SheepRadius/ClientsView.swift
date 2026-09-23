@@ -67,7 +67,7 @@ struct ClientsView: View {
                 }
             }
             .paneColumn()
-            .padding(.top, 18)
+            .padding(.top, PaneColumn.headerTop)
             .padding(.bottom, 16)
 
             VStack(alignment: .leading, spacing: 12) {

@@ -32,7 +32,9 @@ struct RadiusServerView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent).tint(Theme.accent)
-                        .disabled(model.busy || model.tools.radiusd == nil)
+                        // Not disabled for a missing radiusd (build 32): the press opens
+                        // Environment, the same as every other start control.
+                        .disabled(model.busy)
                     }
                     if model.tools.radiusd == nil {
                         NoteRow(text: Toolchain.missingServerMessage(server: "RADIUS", binary: "radiusd"),

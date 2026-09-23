@@ -14,6 +14,12 @@ over LDAP, and for a NAC doing PEAP-MSCHAPv2 against a generic LDAP source.
 no Homebrew, no LaunchDaemon, and nothing written outside
 `~/Library/Application Support/SheepRadius/`. Quitting the app stops both servers.
 
+[![Download SheepRadius for macOS](https://img.shields.io/badge/Download-SheepRadius_0.1_%2832%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepRadius/releases/latest)
+
+**[Get the latest release →](https://github.com/bestonehxh/SheepRadius/releases/latest)** — download
+`SheepRadius-0.1-32.zip`, unzip, and drag **SheepRadius.app** into `Applications`. The build is
+unsigned: the first time, right-click it and choose **Open**.
+
 ## What it looks like
 
 The look is native macOS — a vibrant sidebar with no icons, grouped key–value lists with
@@ -663,14 +669,28 @@ and before switching the directory backend.
   it.
 - The CA and server certificate are throwaway test credentials. Do not install the CA on a
   machine you care about beyond the lab.
-- **Do not publish builds of this app.** It bundles FreeRADIUS (GPLv2) and OpenLDAP; that is
-  fine for personal use on your own machines, but distributing it is a different question
-  that has not been answered.
+- **The download bundles third-party servers under their own licences** — see
+  [Third-party software](#third-party-software). Their source is linked there.
 - Keep the lab folder path short. FreeRADIUS cannot read a configuration directory longer
   than 200 characters, so SheepRadius refuses a lab folder over 194 and says so — the
   default location is nowhere near that.
 - Not a directory server, not a production AAA. It is a test rig you can delete by throwing
   away `~/Library/Application Support/SheepRadius/`.
+
+## Third-party software
+
+The app bundle carries these programs and libraries, unmodified except that their load paths are
+rewritten to point inside the bundle. Each remains under its own licence; the source for the
+exact version is at the link.
+
+| Component | Version | Licence | Source |
+|---|---|---|---|
+| FreeRADIUS server | 3.2.10 | GPL-2.0 | https://github.com/FreeRADIUS/freeradius-server/releases/tag/release_3_2_10 |
+| OpenLDAP | 2.7.1 | OpenLDAP Public License 2.8 | https://www.openldap.org/software/download/ |
+| OpenSSL | 3.6.4 | Apache-2.0 | https://github.com/openssl/openssl/releases/tag/openssl-3.6.4 |
+| talloc | Homebrew build | LGPL-3.0 | https://www.samba.org/ftp/talloc/ |
+| GNU Readline | 8 | GPL-3.0 | https://ftp.gnu.org/gnu/readline/ |
+| wpa_supplicant (`eapol_test`) | 2.11 | BSD-3-Clause | https://w1.fi/releases/wpa_supplicant-2.11.tar.gz |
 
 ## Acknowledgements
 

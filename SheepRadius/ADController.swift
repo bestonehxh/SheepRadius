@@ -89,6 +89,10 @@ final class ADController: ObservableObject {
     @Published private(set) var volumeExists = false
     @Published private(set) var diskUsage = ""
     @Published private(set) var prerequisitesChecked = false
+    /// **Known** to be missing — asked of a running container system and not listed. While the
+    /// system is stopped (its resting state after every Stop) `imageReference` is nil because
+    /// nobody could ask, which is not the same answer (build 32).
+    var imageKnownMissing: Bool { prerequisitesChecked && systemRunning && imageReference == nil }
 
     /// The streamed installer/builder, reusing the card the Homebrew installer uses.
     let builder = ServerProcess(title: "container")
@@ -243,7 +247,7 @@ final class ADController: ObservableObject {
     func start(_ settings: ADSettings, sync doc: LabDocument? = nil) async {
         guard !isRunning, !state.isBusy else { return }
         guard let tool = tools.containerTool else {
-            fail("Apple's `container` tool was not found. AD Domain mode needs it — install it with Homebrew from the Directory pane.")
+            fail("Apple's `container` tool was not found. AD Domain mode needs it — install it with Homebrew from App ▸ Environment.")
             return
         }
         let problems = settings.problems
@@ -294,7 +298,7 @@ final class ADController: ObservableObject {
                 throw LabEnvironment.Failure(message: """
                 The domain-controller image is not built yet.
 
-                Open Directory ▸ Server and press “Build image”. It takes a couple of minutes \
+                Open App ▸ Environment and press “Build image”. It takes a couple of minutes \
                 and downloads Debian's arm64 base image and Samba's packages.
                 """)
             }
@@ -1423,7 +1427,7 @@ final class ADController: ObservableObject {
     }()
 
     func note(_ text: String) {
-        logBuffer.append(LogLine(id: nextLineID, text: text))
+        logBuffer.append(LogLine(id: nextLineID, text: text, time: Date()))
         nextLineID += 1
         if logBuffer.count > maxLines { logBuffer.removeFirst(logBuffer.count - maxLines) }
         if Self.tracing { print("[ad] \(text)") }

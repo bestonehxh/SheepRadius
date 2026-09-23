@@ -29,6 +29,10 @@ nonisolated struct ADSettings: Codable, Hashable, Sendable {
     var netbiosDomain = "LABSHEEP"
     /// Host part of the DC's name; the FQDN is `<dcHostname>.<realm>`.
     var dcHostname = "dc1"
+    /// Where to set it, in the words of the menu (build 32).
+    static let missingPasswordMessage = "Samba AD needs an Administrator password before it can start. "
+        + "Set it under Directory \u{25B8} Server \u{25B8} Domain \u{25B8} Administrator password (Change…). "
+        + "Devices use it to join the domain."
     var administratorPassword = ""
     /// `ldap server require strong auth = no`, so lab NAC boxes can do a simple bind.
     var allowSimpleBind = true
@@ -144,7 +148,7 @@ nonisolated struct ADSettings: Codable, Hashable, Sendable {
             out.append("The DC hostname may only contain letters, digits and hyphens.")
         }
         if administratorPassword.isEmpty {
-            out.append("Set an Administrator password — devices need it to join.")
+            out.append(Self.missingPasswordMessage)
         }
         if !Validation.isValidName(managedRootRDN) {
             out.append("The managed OU name \(Validation.nameRule)")
@@ -216,6 +220,11 @@ nonisolated struct ADSettings: Codable, Hashable, Sendable {
         return out
     }
 }
+
+/// Samba AD is configured as one root domain in SheepRadius. Forest child-domain
+/// provisioning is intentionally not exposed because upstream Samba does not provide
+/// a working `SUBDOMAIN` join flow.
+
 
 // MARK: - Why a sync did not start
 

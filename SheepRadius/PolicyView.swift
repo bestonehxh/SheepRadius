@@ -438,11 +438,14 @@ struct PolicyView: View {
     }
 
     private var generated: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // Once per pass: it walks every rule twice (default + inner-tunnel), and this pane
+        // redraws on every keystroke in a rule.
+        let unlang = ConfigGenerator.rulesUnlang(model.doc)
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Generated unlang").cardTitle()
                 Spacer()
-                CopyButton("Copy", value: ConfigGenerator.rulesUnlang(model.doc), bordered: true)
+                CopyButton("Copy", value: unlang, bordered: true)
                     .controlSize(.small)
             }
             HStack(spacing: 6) {
@@ -456,7 +459,7 @@ struct PolicyView: View {
                 Spacer(minLength: 0)
             }
             ScrollView([.horizontal, .vertical]) {
-                Text(ConfigGenerator.rulesUnlang(model.doc))
+                Text(unlang)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Theme.text2)
                     .textSelection(.enabled)

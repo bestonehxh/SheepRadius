@@ -204,7 +204,12 @@ extension AppModel {
                 let fresh = try await provider.snapshot()
                 let changed = fresh.users != directory.users || fresh.groups != directory.groups
                     || fresh.ous != directory.ous || fresh.computers != directory.computers
-                directory = fresh
+                // Published only when something other than the read's own timestamp moved: the
+                // 30 s poll used to redraw Users, Groups, Policy and Test every tick of an idle
+                // directory, because `takenAt` alone made every snapshot unequal.
+                var unchanged = fresh
+                unchanged.takenAt = directory.takenAt
+                if unchanged != directory { directory = fresh }
                 directoryError = nil
                 directoryCanDisable = provider.supportsDisable
                 // A password changed in ADUC, a user added by somebody else's samba-tool: the
@@ -635,6 +640,44 @@ extension AppModel {
             try await provider.setMembership(of: name, groups: ["ProbeGroup"])
         }
         say("membership \(ok ? "ok" : "FAILED") groups=\(directory.users.first { $0.username == name }?.groups.joined(separator: ",") ?? "-")")
+
+        // Build 32: every catalogued attribute through the inspector's own call, read back
+        // from a fresh snapshot — the first cut saved these and read them back empty, because
+        // neither backend's search asked for them.
+        let manager = directory.users.first { $0.username != name && !$0.isReadOnly }?.dn
+        var setMissing: [String] = []
+        for attribute in UserAttribute.catalog {
+            let value: String
+            switch attribute.kind {
+            case .countryCode: value = "TH"
+            case .distinguishedName:
+                guard let manager else { continue }
+                value = manager
+            case .telephone: value = "+66 2 123 4567"
+            case .ascii: value = "probe1@lab.sheep"
+            // Thai on purpose: every free-text attribute must carry UTF-8 intact.
+            case .text: value = String("ทดสอบ \(attribute.name)".prefix(attribute.maxLength))
+            }
+            _ = await directoryEdit(attribute.label) {
+                try await $0.setUserAttribute(name, attribute: attribute.name, value: value)
+            }
+            let back = directory.users.first { $0.username == name }?.value(attribute) ?? ""
+            let same = attribute.kind == .distinguishedName
+                ? back.caseInsensitiveCompare(value) == .orderedSame : back == value
+            if !same { setMissing.append(attribute.name) }
+        }
+        say("attrs-set \(setMissing.isEmpty ? "ok" : "MISSING " + setMissing.joined(separator: ","))")
+        var clearLeft: [String] = []
+        for attribute in UserAttribute.catalog {
+            _ = await directoryEdit(attribute.label) {
+                try await $0.setUserAttribute(name, attribute: attribute.name, value: "")
+            }
+            let back = directory.users.first { $0.username == name }?.value(attribute) ?? ""
+            // OpenLDAP's sn is MUST, so a cleared one holds the username.
+            let expected = attribute.requiredInOpenLDAP && doc.settings.directoryBackend == .openLDAP ? name : ""
+            if back != expected { clearLeft.append("\(attribute.name)=\(back)") }
+        }
+        say("attrs-clear \(clearLeft.isEmpty ? "ok" : "LEFT " + clearLeft.joined(separator: ","))")
 
         ok = await directoryEdit("Password") { provider in
             try await provider.setPassword(name, to: "Probe-2-pass!")

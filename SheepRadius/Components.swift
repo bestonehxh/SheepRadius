@@ -426,7 +426,8 @@ struct PaneBody<Content: View>: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: spacing) { content }
-                .padding(.vertical, 18)
+                .padding(.top, PaneColumn.headerTop)
+                .padding(.bottom, 18)
                 .paneColumn(maxWidth: maxWidth)
         }
     }
@@ -945,4 +946,34 @@ struct TableEmptyOverlay<Extra: View>: View {
 
 extension TableEmptyOverlay where Extra == EmptyView {
     init(_ text: String) { self.init(text: text) { EmptyView() } }
+}
+
+
+// MARK: - English-only input
+
+/// **The keyboard switches to English by itself** in a field that can only hold ASCII (build
+/// 32, owner: "บังคับเปลี่ยนภาษาเองเลย"). The same mechanism `NSSecureTextField` uses:
+/// `allowedInputSourceLocales` on the field editor's input context, which macOS honours by
+/// switching to a Roman input source while that context is active and restoring the person's
+/// own one afterwards. The field editor is shared by every text field in the window, so the
+/// restriction is lifted the moment focus moves to a field that does not want it.
+enum ASCIIInput {
+    static func restrict(_ on: Bool) {
+        // After SwiftUI has moved focus, so the field editor is the new field's.
+        DispatchQueue.main.async {
+            guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
+                  let context = editor.inputContext else { return }
+            let wanted: [String]? = on ? [NSAllRomanInputSourcesLocaleIdentifier] : nil
+            guard context.allowedInputSourceLocales != wanted else { return }
+            context.allowedInputSourceLocales = wanted
+            // The restriction is applied when a context becomes active; this one already is.
+            context.deactivate()
+            context.activate()
+        }
+    }
+
+    /// Whatever a paste or a dead key let through.
+    static func filtered(_ text: String) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.filter(\.isASCII)))
+    }
 }

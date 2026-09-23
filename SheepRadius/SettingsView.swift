@@ -79,31 +79,6 @@ struct SettingsView: View {
                     }
                 }
 
-                PaneGroup("Components") {
-                    // A release build carries all of these, so "bundled" is the normal answer
-                    // and "Homebrew" means this is a development build.
-                    component("RADIUS server", model.radiusDescription, model.tools.radiusd)
-                    component("RADIUS client", model.radiusDescription, model.tools.radclient)
-                    component("LDAP server", model.ldapDescription, model.tools.slapd)
-                    component("LDAP client", model.ldapClientDescription, model.tools.ldapsearch)
-                    component("TLS", model.opensslDescription, model.tools.openssl)
-                    KeyValueRow("Dictionaries") { path(model.tools.dictionaryDir) }
-                    KeyValueRow("LDAP schemas") { path(model.tools.schemaDir) }
-                    KeyValueRow("Lab folder") {
-                        HStack(spacing: 8) {
-                            path(model.env.base.path)
-                            Button("Reveal") {
-                                NSWorkspace.shared.activateFileViewerSelecting([model.env.base])
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                    }
-                    // Build 18: this sentence used to sit under every pane of the app, in the
-                    // sidebar's footer. It is true, it is worth saying once, and it is not
-                    // worth a permanent strip of the window.
-                    NoteRow(text: "Lab use only. Passwords are stored in cleartext because PEAP-MSCHAPv2 needs them.",
-                            systemImage: "info.circle")
-                }
             }
             .font(.system(size: 12.5))
             .controlSize(.small)

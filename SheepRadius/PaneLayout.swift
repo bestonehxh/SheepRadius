@@ -44,7 +44,16 @@ nonisolated enum PaneColumn {
     /// The band the window's title bar occupies. The sidebar owns the traffic lights in it and
     /// has always reserved it; build 22 reserves the same height in the main column, so a pane
     /// title starts level with the sidebar's first heading instead of inside the title bar.
-    static let titleBar: CGFloat = 44
+    ///
+    /// **30 pt from build 32** (owner: the menu, then the pane, sat too far below the traffic
+    /// lights). The lights end ~26 pt down, so 30 clears them in both columns and keeps the
+    /// two first headings level.
+    static let titleBar: CGFloat = 30
+
+    /// Above a pane's first line, under the band (build 32). Every pane uses it — `PaneBody`
+    /// and the table panes' own headers alike — so the eyebrow sits level with the sidebar's
+    /// SERVERS heading on every pane, not only on the ones that scroll.
+    static let headerTop: CGFloat = 2
 
     /// The same band in full screen, where there are no traffic lights to leave room for.
     static let titleBarFullScreen: CGFloat = 12
@@ -460,6 +469,10 @@ nonisolated enum PaneHeadline {
             Block(eyebrow: "TLS",
                   heading: "One authority, two leaves.",
                   subtitle: "The lab CA, the RADIUS certificate, the directory certificate and the client certificates")
+        case "environment":
+            Block(eyebrow: "Environment",
+                  heading: "Everything the lab needs.",
+                  subtitle: "Bundled servers, runtime tools and the files SheepRadius uses")
         case "settings":
             Block(eyebrow: "App",
                   heading: "The lab and this build.",

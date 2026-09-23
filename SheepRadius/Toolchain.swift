@@ -10,6 +10,23 @@ import Foundation
 /// Nothing falls back to a macOS-supplied copy: not `/usr/libexec/slapd` (OpenLDAP 2.4.28
 /// from 2011), not `/usr/bin/ldapsearch`, not `/usr/bin/openssl` (LibreSSL). Everything the
 /// app drives is one known version, bundled, so every Mac behaves identically.
+/// One installable thing on the Environment pane. A start that fails because one of these is
+/// missing opens that pane with the item highlighted, rather than leaving the person to find
+/// the install button three panes away.
+nonisolated enum EnvironmentItem: String, Sendable, CaseIterable {
+    case radius, ldap, container, adImage
+
+    /// The sentence at the top of the Environment pane when a start was sent here.
+    var reason: String {
+        switch self {
+        case .radius: "RADIUS cannot start: FreeRADIUS is not in this build."
+        case .ldap: "OpenLDAP cannot start: slapd is not in this build."
+        case .container: "Samba AD cannot start: Apple's container tool is not installed."
+        case .adImage: "Samba AD cannot start: the domain-controller image is not built yet."
+        }
+    }
+}
+
 nonisolated struct Toolchain: Equatable, Sendable {
     enum RadiusSource: String, Sendable {
         case bundled, homebrew
@@ -126,6 +143,19 @@ nonisolated struct Toolchain: Equatable, Sendable {
     /// The Homebrew formulae that are missing, in the order the Status card offers them.
     var missingFormulae: [String] {
         (radiusd == nil ? ["freeradius-server"] : []) + (slapd == nil ? ["openldap"] : [])
+    }
+
+    /// **What the Environment pane should open onto at launch**, or nil when nothing the lab
+    /// is set to use is missing. RADIUS and OpenLDAP always count; `container` and the DC image
+    /// only when the lab's directory is Samba AD — someone who never uses AD mode is not sent
+    /// to install Apple's container runtime every time they open the app.
+    func launchBlocker(backend: DirectoryBackend, imageBuilt: Bool) -> EnvironmentItem? {
+        if !radiusReady { return .radius }
+        if !ldapReady { return .ldap }
+        guard backend == .activeDirectory else { return nil }
+        if containerTool == nil { return .container }
+        if !imageBuilt { return .adImage }
+        return nil
     }
 
     static let containerPaths = ["/opt/homebrew/bin/container", "/usr/local/bin/container"]

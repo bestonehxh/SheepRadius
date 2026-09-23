@@ -455,3 +455,76 @@ nonisolated enum LogTime {
     private static let months: Set<String> = ["jan", "feb", "mar", "apr", "may", "jun",
                                               "jul", "aug", "sep", "oct", "nov", "dec"]
 }
+
+
+// MARK: - Reading a line (build 32)
+
+/// **How a raw server line is drawn in the Log pane** (build 32, owner: "ปรับ Format log ให้อ่าน
+/// ง่ายขึ้น"). Pure, so the unit suite pins it. Three jobs:
+///
+/// * a **clock column** — the server's own stamp when it printed one (slapd, Samba, radiusd
+///   outside debug), otherwise the time the app received the line, because radiusd at `-x`
+///   prints none and a RADIUS log with no time in it cannot be matched to a device's own log;
+/// * the **noise** taken out of the message: slapd's thread pointer after its stamp;
+/// * which lines are **authentications**, for the Auth only switch every feed now has.
+nonisolated enum LogPresentation {
+    /// `(clock, message)`. `clock` is `HH:mm:ss`, or nil when neither the line nor `received`
+    /// has one.
+    static func split(_ localized: String, received: Date?, in zone: TimeZone = .current) -> (clock: String?, message: String) {
+        var clock: String?
+        var message = Substring(localized)
+        if message.count >= 8, isClock(message.prefix(8)) {
+            clock = String(message.prefix(8))
+            message = message.dropFirst(8)
+            // radiusd outside debug: "HH:mm:ss : Auth: …"
+            if message.hasPrefix(" : ") { message = message.dropFirst(3) }
+            // slapd: "HH:mm:ss 0x16e9d7000 conn=…" — the thread is not something to read.
+            if message.hasPrefix(" 0x") {
+                let rest = message.dropFirst(1)
+                if let space = rest.firstIndex(of: " ") { message = rest[space...] }
+            }
+        } else if let received {
+            clock = LogTime.clock(received, in: zone)
+        }
+        return (clock, String(message.drop { $0 == " " }))
+    }
+
+    /// Lines that are true and say nothing: radiusd between requests, its BlastRADIUS banner
+    /// rules, slapd's connection teardown.
+    static func isQuiet(_ text: String) -> Bool {
+        quietMarkers.contains { text.contains($0) } || text.hasSuffix(" closed")
+    }
+
+    /// Between requests, and radiusd's start-up banner — measured from a real start of 3.2.10.
+    /// Faded, never hidden: a start that failed is diagnosed from exactly these lines.
+    private static let quietMarkers = [
+        "Ready to process requests", "Waking up in ", "Cleaning up request", "!!!!!!!!",
+        " UNBIND", "Finished request", "Done request",
+        "Copyright (C)", "There is NO warranty", "PARTICULAR PURPOSE", "You may redistribute",
+        "GNU General Public License", "see the file named COPYRIGHT", "is developed, maintained",
+        "For commercial support", "inkbridgenetworks.com", "Compiling Auth-Type",
+        "Using cached TLS configuration", "Found debugger attached",
+        "All secret information will be replaced", "suppress_secrets=no",
+    ]
+
+    /// The Auth only switch: a line that is a verdict, or an attempt the server refused
+    /// without one. The same rules Recent authentications is built from, so the two agree.
+    static func isAuthLine(_ text: String, source: LogSource) -> Bool {
+        switch source {
+        case .radius:
+            return text.contains("Login OK") || text.contains("Login incorrect")
+                || text.contains("from unknown client ") || text.contains("Dropping packet without response")
+        case .ldap:
+            return text.contains(" BIND dn=\"") && text.contains(" method=")
+                || text.contains(" RESULT tag=97 ")
+        case .adDC:
+            return ADAuthAudit.isAuthLine(text)
+        }
+    }
+
+    private static func isClock(_ text: Substring) -> Bool {
+        let bytes = Array(text.utf8)
+        guard bytes.count == 8, bytes[2] == UInt8(ascii: ":"), bytes[5] == UInt8(ascii: ":") else { return false }
+        return [0, 1, 3, 4, 6, 7].allSatisfy { (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(bytes[$0]) }
+    }
+}

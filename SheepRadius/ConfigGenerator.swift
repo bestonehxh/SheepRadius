@@ -554,6 +554,11 @@ nonisolated enum ConfigGenerator {
         memberof-group-oc groupOfNames
         memberof-member-ad member
         memberof-memberof-ad memberOf
+
+        # Build 32: `manager` is a DN. AD's is a linked attribute and follows a rename, move or
+        # delete; refint (compiled into the bundled slapd) does the same here.
+        overlay refint
+        refint_attributes manager
         \(tlsBlock)
         """
     }
@@ -754,11 +759,56 @@ nonisolated enum ConfigGenerator {
     \tSYNTAX 1.3.6.1.4.1.1466.115.121.1.26{32}
     \tSINGLE-VALUE )
 
+    # Build 32: the Organization / General-tab attributes ADUC shows that no OpenLDAP schema
+    # has, under Microsoft's own OIDs so a device configured for AD reads the same names here.
+    # `info`, `c`, `street`, `st`, `l`, `postOfficeBox`, `homePhone`, `pager` and the rest come
+    # from core / cosine and are only added to the class's MAY list below.
+    attributetype ( 1.2.840.113556.1.2.141
+    \tNAME 'department'
+    \tDESC 'AD Department'
+    \tEQUALITY caseIgnoreMatch
+    \tSUBSTR caseIgnoreSubstringsMatch
+    \tSYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64}
+    \tSINGLE-VALUE )
+
+    attributetype ( 1.2.840.113556.1.2.146
+    \tNAME 'company'
+    \tDESC 'AD Company'
+    \tEQUALITY caseIgnoreMatch
+    \tSUBSTR caseIgnoreSubstringsMatch
+    \tSYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64}
+    \tSINGLE-VALUE )
+
+    attributetype ( 1.2.840.113556.1.4.35
+    \tNAME 'employeeID'
+    \tDESC 'AD Employee-ID'
+    \tEQUALITY caseIgnoreMatch
+    \tSUBSTR caseIgnoreSubstringsMatch
+    \tSYNTAX 1.3.6.1.4.1.1466.115.121.1.15{16}
+    \tSINGLE-VALUE )
+
+    attributetype ( 1.2.840.113556.1.2.464
+    \tNAME 'wWWHomePage'
+    \tDESC 'AD WWW-Home-Page'
+    \tEQUALITY caseIgnoreMatch
+    \tSUBSTR caseIgnoreSubstringsMatch
+    \tSYNTAX 1.3.6.1.4.1.1466.115.121.1.15{2048}
+    \tSINGLE-VALUE )
+
+    attributetype ( 1.2.840.113556.1.4.721
+    \tNAME 'ipPhone'
+    \tDESC 'AD Phone-Ip-Primary'
+    \tEQUALITY caseIgnoreMatch
+    \tSUBSTR caseIgnoreSubstringsMatch
+    \tSYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64}
+    \tSINGLE-VALUE )
+
     objectclass ( 1.3.6.1.4.1.99999.1.1
     \tNAME 'sheepRadiusAccount'
     \tDESC 'AD-style attributes for SheepRadius lab users'
     \tSUP top AUXILIARY
-    \tMAY ( sAMAccountName $ userPrincipalName $ sambaNTPassword ) )
+    \tMAY ( sAMAccountName $ userPrincipalName $ sambaNTPassword $
+    \t      department $ company $ employeeID $ wWWHomePage $ ipPhone $ info $ c ) )
 
     """
 

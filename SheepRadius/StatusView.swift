@@ -386,105 +386,27 @@ struct StatusView: View {
     // MARK: Missing components (development builds only)
 
     /// Only reachable on a build without the bundled FreeRADIUS (or with `-demoNoRadius 1`):
-    /// a release .app carries its own copy and never shows this.
+    /// a release .app carries its own copy and never shows this. The install itself lives on
+    /// App ▸ Environment from build 32 — this is the pointer to it.
     private var missingTools: some View {
-        PaneGroup("Missing components", help: """
-        A release build carries its own copy of every server, so a missing one means this is a \
-        development build (or the bundled copy was stripped).
-
-        Homebrew can fix it from here: it runs as you — no administrator password, and nothing \
-        outside Homebrew's own prefix. Homebrew's own installer is the one thing that cannot be \
-        run from here, because it needs an administrator password and the Xcode command line \
-        tools.
-        """) {
-            let missing = model.tools.missingFormulae
-            if !missing.isEmpty {
-                NoteRow(text: "\(Self.describe(missing)) not found.",
-                        systemImage: "exclamationmark.triangle.fill", tint: Theme.warn)
-                if model.tools.brew != nil {
-                    PlainRow { InstallButton(formulae: missing) }
-                } else {
-                    NoteRow(text: "Homebrew was not found either — run these two in Terminal, in order.")
-                    PlainRow {
-                        CopyButton("Copy Homebrew install command",
-                                   value: Self.homebrewInstallCommand, bordered: true)
-                        CopyButton("Copy \(missing.joined(separator: " + ")) command",
-                                   value: "brew install \(missing.joined(separator: " "))",
-                                   bordered: true)
-                        Button("Open Terminal") {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
-                        }
-                        .buttonStyle(.bordered)
-                        Spacer(minLength: 0)
-                    }
+        PaneGroup("Missing components") {
+            NoteRow(text: !model.tools.missingFormulae.isEmpty
+                        ? "\(EnvironmentView.describe(model.tools.missingFormulae)) not found."
+                        : model.tools.openssl == nil ? "openssl was not found."
+                        : "The OpenLDAP schema directory was not found.",
+                    systemImage: "exclamationmark.triangle.fill", tint: Theme.warn)
+            PlainRow {
+                Button("Open Environment") {
+                    model.openEnvironment(for: model.tools.radiusReady ? .ldap : .radius)
                 }
-            }
-            if model.tools.openssl == nil {
-                NoteRow(text: "openssl was not found — macOS normally ships LibreSSL at /usr/bin/openssl.")
+                .buttonStyle(.bordered)
+                Spacer(minLength: 0)
             }
         }
         .controlSize(.small)
-    }
-
-    /// The official one-liner from brew.sh. Copied, never executed by the app.
-    private static let homebrewInstallCommand =
-        "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-
-    private static func describe(_ formulae: [String]) -> String {
-        let names = formulae.map { $0 == "freeradius-server" ? "FreeRADIUS" : "OpenLDAP" }
-        return names.count == 1 ? "\(names[0]) was" : "\(names.joined(separator: " and ")) were"
     }
 }
 
 // Status' own `CopyButton(title, value)` shorthand is gone (build 24): the shared
 // `CopyButton` in Components.swift is what every copy control in the app is now, so the
 // confirmation cannot be in one of them and not another.
-
-/// `brew install <formulae>`, streamed live. Observes the ServerProcess directly so the
-/// output appears as it arrives instead of all at once at the end.
-private struct InstallButton: View {
-    @ObservedObject private var model = AppModel.shared
-    @ObservedObject private var installer = AppModel.shared.installer
-    let formulae: [String]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Button("Install \(formulae.joined(separator: " + ")) with Homebrew") {
-                    model.installWithHomebrew(formulae)
-                }
-                    .buttonStyle(.borderedProminent).tint(Theme.accent)
-                    .disabled(installer.isRunning)
-                if installer.isRunning {
-                    ProgressView().controlSize(.small)
-                    Text("This takes a few minutes.").hint()
-                }
-                Spacer(minLength: 0)
-            }
-
-            if !installer.log.isEmpty {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 1) {
-                            ForEach(installer.log) { line in
-                                Text(line.text)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Theme.text2)
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .id(line.id)
-                            }
-                        }
-                        .padding(8)
-                    }
-                    .frame(height: 150)
-                    .background(RoundedRectangle(cornerRadius: Metrics.field).fill(Theme.well))
-                    .onChange(of: installer.log.count) {
-                        if let last = installer.log.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}

@@ -29,7 +29,7 @@ nonisolated struct LabManifest: Codable, Sendable, Equatable {
     var backend: DirectoryBackend
     var userCount: Int
     var groupCount: Int
-    /// `BEST$`, `CLIENT-T14$` — the machine accounts that will keep working, which is the
+    /// `BEST$`, `NATCHANON-T14$` — the machine accounts that will keep working, which is the
     /// whole reason for moving a volume rather than re-provisioning.
     var joinedComputers: [String] = []
     /// Bytes per component, for the sheet's "this will take 112 MB" line.

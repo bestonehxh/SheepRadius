@@ -134,7 +134,7 @@ struct GroupsView: View {
             }
         }
         .paneColumn()
-        .padding(.top, 18)
+        .padding(.top, PaneColumn.headerTop)
         .padding(.bottom, 16)
     }
 

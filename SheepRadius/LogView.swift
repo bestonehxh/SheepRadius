@@ -10,7 +10,8 @@ struct LogView: View {
     /// AD DC only: keep just the domain controller's `Auth:` lines. A DC at
     /// `log level = 1 auth_audit:3` still prints plenty that is not an authentication, and
     /// this is the pane a person opens when a Wi-Fi client will not log in.
-    @State private var authOnly = false
+    /// `-demoLogAuthOnly 1` opens with it on, for a screenshot (build 32).
+    @State private var authOnly = CommandLine.value(after: "-demoLogAuthOnly") == "1"
 
     /// The feed lives in the model, not here: starting a server moves it. See `LogSourcePolicy`.
     private var source: LogSource { model.logSource }
@@ -25,15 +26,21 @@ struct LogView: View {
     private var visibleText: String {
         var lines: [LogLine]
         switch source {
-        case .adDC:
-            lines = model.ad.log
-            if authOnly { lines = lines.filter { ADAuthAudit.isAuthLine($0.text) } }
+        case .adDC: lines = model.ad.log
         case .ldap: lines = model.ldap.log
         case .radius: lines = model.radius.log
         }
+        if authOnly { lines = lines.filter { LogPresentation.isAuthLine($0.text, source: source) } }
         if !applied.isEmpty { lines = lines.filter { matches($0.text, applied) } }
         return lines
-            .map { LogRedaction.redact(LogTime.localized($0.text), show: model.showPasswordsInLogs) }
+            .map { line in
+                // The same clock column the pane draws (build 32), so a pasted log still says
+                // when each RADIUS line happened.
+                let parts = LogPresentation.split(
+                    LogRedaction.redact(LogTime.localized(line.text), show: model.showPasswordsInLogs),
+                    received: line.time)
+                return parts.clock.map { "\($0)  \(parts.message)" } ?? parts.message
+            }
             .joined(separator: "\n")
     }
 
@@ -41,7 +48,7 @@ struct LogView: View {
         VStack(spacing: 0) {
             PaneHeader(PaneHeadline.block(for: "log"))
                 .paneColumn()
-                .padding(.top, 18)
+                .padding(.top, PaneColumn.headerTop)
                 .padding(.bottom, 12)
 
             PaneStrip {
@@ -53,8 +60,8 @@ struct LogView: View {
                 TextField("Filter", text: $filter)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
                 Spacer(minLength: 0)
+                authOnlyToggle
                 if source == .radius { debugToggle }
-                if source == .adDC { authOnlyToggle }
                 showPasswordsToggle
                 // **A log you can take away** (build 25, QA M-6). There was no copy button,
                 // no context menu and no Save on any of the three feeds — the one pane whose
@@ -76,10 +83,10 @@ struct LogView: View {
                 ADLogLines(filter: applied, authOnly: authOnly,
                            showPasswords: model.showPasswordsInLogs).id(source)
             case .ldap:
-                LogLines(server: model.ldap, filter: applied,
+                LogLines(server: model.ldap, source: .ldap, filter: applied, authOnly: authOnly,
                          showPasswords: model.showPasswordsInLogs).id(source)
             case .radius:
-                LogLines(server: model.radius, filter: applied,
+                LogLines(server: model.radius, source: .radius, filter: applied, authOnly: authOnly,
                          showPasswords: model.showPasswordsInLogs).id(source)
             }
         }
@@ -115,7 +122,7 @@ struct LogView: View {
         Toggle("Auth only", isOn: $authOnly)
             .toggleStyle(.checkbox)
             .font(.system(size: 12))
-            .help("Only the domain controller's authentication lines. NT_STATUS_OK is green, any other NT_STATUS_ is red. Authorisation (“AuthZ”) lines are left out: Samba prints one for each successful authentication it has already reported.")
+            .help("Only the lines that are an authentication: RADIUS verdicts and the requests radiusd refused without answering (unknown client, wrong shared secret), LDAP binds and their results, the domain controller's Auth: lines. Green is accepted, red is refused.")
     }
 
     /// The visible feed, as a `.log` file. Named after the source and the day, because the
@@ -159,7 +166,7 @@ private struct ADLogLines: View {
 
     private var lines: [LogLine] {
         var out = ad.log
-        if authOnly { out = out.filter { ADAuthAudit.isAuthLine($0.text) } }
+        if authOnly { out = out.filter { LogPresentation.isAuthLine($0.text, source: .adDC) } }
         if !filter.isEmpty { out = out.filter { matches($0.text, filter) } }
         return out
     }
@@ -175,16 +182,22 @@ private struct ADLogLines: View {
 
 private struct LogLines: View {
     @ObservedObject var server: ServerProcess
+    let source: LogSource
     let filter: String
+    let authOnly: Bool
     let showPasswords: Bool
 
     private var lines: [LogLine] {
-        filter.isEmpty ? server.log : server.log.filter { matches($0.text, filter) }
+        var out = server.log
+        if authOnly { out = out.filter { LogPresentation.isAuthLine($0.text, source: source) } }
+        if !filter.isEmpty { out = out.filter { matches($0.text, filter) } }
+        return out
     }
 
     var body: some View {
         LogScroll(lines: lines, showPasswords: showPasswords,
-                  empty: "No output yet — start the server.")
+                  empty: server.log.isEmpty ? "No output yet — start the server."
+                                            : "No authentications yet.")
     }
 }
 
@@ -272,20 +285,44 @@ private struct LogRow: View {
     let line: LogLine
     let showPasswords: Bool
 
+    /// Build 32: a clock column, the verdicts set off as bold rows on a tint, a gap before
+    /// each request, and the between-requests chatter faded — so a person scrolling back finds
+    /// "what happened to that login" without reading every line of radiusd's trace.
     var body: some View {
-        Text(LogRedaction.redact(LogTime.localized(line.text), show: showPasswords).nonEmpty ?? " ")
-            .font(.system(size: 11.5, design: .monospaced))
-            .foregroundStyle(Self.color(line.kind))
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .id(line.id)
+        let kind = line.kind
+        let parts = LogPresentation.split(
+            LogRedaction.redact(LogTime.localized(line.text), show: showPasswords), received: line.time)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(parts.clock ?? "")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Theme.faintText)
+                .frame(width: 58, alignment: .leading)
+            Text(parts.message.nonEmpty ?? " ")
+                .font(.system(size: 11.5, weight: Self.isVerdict(kind) ? .semibold : .regular,
+                              design: .monospaced))
+                .foregroundStyle(Self.color(kind))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, Self.isVerdict(kind) ? 2 : 0)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(kind == .accept ? Theme.ok.opacity(0.12)
+                      : kind == .reject ? Theme.err.opacity(0.12) : .clear))
+        .padding(.top, kind == .request ? 8 : 0)
+        .id(line.id)
     }
+
+    static func isVerdict(_ kind: LogLine.Kind) -> Bool { kind == .accept || kind == .reject }
 
     static func color(_ kind: LogLine.Kind) -> Color {
         switch kind {
         case .accept: Theme.ok
         case .reject: Theme.err
         case .note: Theme.accent
+        case .request: Theme.text
+        case .quiet: Theme.faintText
         case .plain: Theme.text2
         }
     }

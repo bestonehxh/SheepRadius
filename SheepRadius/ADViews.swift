@@ -271,6 +271,12 @@ struct ADServerSections: View {
             await ad.refreshPrerequisites()
             await ad.refreshDiskUsage()
         }
+        // "Set password…" on the start refusal lands here (build 32).
+        .onChange(of: model.requestADPasswordEntry, initial: true) { _, wanted in
+            guard wanted else { return }
+            model.requestADPasswordEntry = false
+            changingPassword = true
+        }
         .sheet(isPresented: $changingPassword) {
             ADPasswordChangeSheet(isRunning: ad.isRunning, realm: settings.realm) {
                 changingPassword = false
@@ -288,105 +294,35 @@ struct ADServerSections: View {
 
     // MARK: Prerequisites
 
+    /// Build 32: installing `container` and building the image live on App ▸ Environment, with
+    /// every other install. This card only says whether AD mode can start and where to go.
     private var prerequisites: some View {
-        adCard("Prerequisites", help: """
-        Apple's `container` tool is the one part of this app that cannot be bundled: it ships a \
-        Linux kernel and installs a launchd agent of its own.
-
-        Building the image takes a couple of minutes and pulls Debian's arm64 base image and \
-        Samba's packages. The platform is pinned to linux/arm64: without that pin the base \
-        image is pulled for every architecture in its index, which cost 19.9 GB once.
-
-        Rebuilding never touches a running domain controller or the state volume — stop and \
-        start AD mode for a new image to take effect. Export writes a ~100 MB tar for a second \
-        Mac, which still needs `container` and its kernel.
-        """) {
+        adCard("Prerequisites") {
             if model.tools.containerTool == nil {
                 Text("Apple's container tool is not installed.").hint()
-                if model.tools.brew != nil {
-                    ADStreamedCommand(title: "Install container with Homebrew",
-                                      run: { model.installWithHomebrew(["container"]) },
-                                      process: model.installer)
-                } else {
-                    HStack(spacing: 8) {
-                        CopyButton("Copy install command", value: "brew install container",
-                                   bordered: true)
-                        Button("Open Terminal") {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .controlSize(.small)
-                }
+            } else if ad.imageKnownMissing {
+                Text("The domain-controller image is not built yet.").hint()
+            } else if ad.imageReference == nil {
+                Text("The container system is stopped; the image is checked when it starts.").hint()
             } else {
-                status("container tool", model.tools.containerTool ?? "", ok: true)
-                status("container system", ad.systemRunning ? "running" : "not running (started automatically)", ok: true)
                 status("domain controller image",
-                       (ad.imageReference ?? "not built") + (ad.imageIsOutdated ? " — a build behind \(ADImage.reference)" : ""),
-                       ok: ad.imageReference != nil && !ad.imageIsOutdated)
-                status("state volume", ad.volumeExists ? "\(ad.volumeName) — adopted, never reprovisioned" : "not created yet", ok: true)
-                // An image built from an older Containerfile is an offer, never a refusal: the
-                // running domain controller goes on serving, and a rebuild changes nothing in
-                // the state volume. The one thing it cannot do is change a DC that is already
-                // up — which is why the sentence says so out loud.
-                if let reason = ad.imageRebuildReason { Text(reason).hint() }
-                if !ad.diskUsage.isEmpty { Text(ad.diskUsage).hint() }
-
-                if ad.imageReference == nil || ad.builder.isRunning || !ad.builder.log.isEmpty {
-                    ADStreamedCommand(title: ad.imageReference == nil ? "Build image" : "Rebuild image",
-                                      run: {
-                                          Task {
-                                              await ad.startBuilder()
-                                              ad.buildImage(context: ADImage.bundledContext)
-                                          }
-                                      },
-                                      process: ad.builder)
-                    Text("Builds \(ADImage.reference) — a couple of minutes.").hint()
-                } else {
-                    HStack(spacing: 8) {
-                        // **Not** disabled while the DC is running. A rebuild writes a new tag
-                        // and leaves the image the running container was created from alone, so
-                        // there is nothing here that a live domain can be hurt by — and telling
-                        // the owner of a running domain to stop it before he can even build the
-                        // fix is how a one-button upgrade becomes an outage.
-                        let rebuild = Button(ad.imageIsOutdated ? "Rebuild image (\(ADImage.reference))" : "Rebuild image") {
-                            Task {
-                                await ad.startBuilder()
-                                ad.buildImage(context: ADImage.bundledContext)
-                            }
-                        }
-                        if ad.imageIsOutdated {
-                            rebuild.buttonStyle(.borderedProminent)
-                        } else {
-                            rebuild.buttonStyle(.bordered)
-                        }
-                        Group {
-                            Button("Export image…") { exportImage() }.buttonStyle(.bordered)
-                            Button("Import image…") { importImage() }.buttonStyle(.bordered)
-                        }
-                        .disabled(ad.isRunning)
-                        Spacer()
-                    }
-                    .controlSize(.small)
-
+                       ad.imageReference! + (ad.imageIsOutdated ? " — a build behind \(ADImage.reference)" : ""),
+                       ok: !ad.imageIsOutdated)
+            }
+            HStack {
+                Button("Open Environment") {
+                    // Highlight only what is really missing — a built image is not a problem.
+                    model.openEnvironment(for: model.tools.containerTool == nil ? .container
+                                          : ad.imageKnownMissing ? .adImage : nil)
                 }
+                    .buttonStyle(.bordered).controlSize(.small)
+                Spacer()
             }
         }
     }
 
     private func status(_ label: String, _ value: String, ok: Bool) -> some View {
-        adField(label) {
-            HStack(spacing: 6) {
-                Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(ok ? Theme.ok : Theme.warn)
-                Text(value)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(Theme.text2)
-                    .lineLimit(1).truncationMode(.middle)
-                    .textSelection(.enabled)
-            }
-        }
+        adStatus(label, value, ok: ok)
     }
 
     // MARK: Domain settings
@@ -486,7 +422,9 @@ struct ADServerSections: View {
                     Task { ad.isRunning ? await model.stopAD() : await model.startAD() }
                 }
                 .buttonStyle(.borderedProminent).tint(Theme.accent)
-                .disabled(ad.state.isBusy || !model.doc.settings.ad.problems.isEmpty)
+                // Not disabled for a settings problem (build 32): a greyed Start said nothing,
+                // and the press now says what is missing and where it is set.
+                .disabled(ad.state.isBusy)
                 // **No Sync now from build 17.** The domain is the original: the Users, Groups
                 // and tree panes edit it directly and each edit has already landed by the time
                 // it is drawn. Refresh, in those panes, is the only button left — and it re-reads
@@ -674,8 +612,105 @@ struct ADServerSections: View {
             Text("The domain \(settings.realm), its users and every joined computer's machine account are destroyed. This cannot be undone.")
         }
     }
+}
 
-    // MARK: Image import / export
+// MARK: - Samba AD prerequisites (App ▸ Environment)
+
+/// Installing `container`, building / importing / exporting the DC image. Lived on Directory ▸
+/// Server until build 32; it is on Environment now with every other install.
+struct ADPrerequisitesCard: View {
+    @ObservedObject private var model = AppModel.shared
+    @ObservedObject private var ad = AppModel.shared.ad
+
+    var body: some View {
+        adCard("Prerequisites", help: """
+        Apple's `container` tool is the one part of this app that cannot be bundled: it ships a \
+        Linux kernel and installs a launchd agent of its own.
+
+        Building the image takes a couple of minutes and pulls Debian's arm64 base image and \
+        Samba's packages. The platform is pinned to linux/arm64: without that pin the base \
+        image is pulled for every architecture in its index, which cost 19.9 GB once.
+
+        Rebuilding never touches a running domain controller or the state volume — stop and \
+        start AD mode for a new image to take effect. Export writes a ~100 MB tar for a second \
+        Mac, which still needs `container` and its kernel.
+        """) {
+            if model.tools.containerTool == nil {
+                Text("Apple's container tool is not installed.").hint()
+                if model.tools.brew != nil {
+                    ADStreamedCommand(title: "Install container with Homebrew",
+                                      run: { model.installWithHomebrew(["container"]) },
+                                      process: model.installer)
+                } else {
+                    HStack(spacing: 8) {
+                        CopyButton("Copy install command", value: "brew install container",
+                                   bordered: true)
+                        Button("Open Terminal") {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .controlSize(.small)
+                }
+            } else {
+                status("container tool", model.tools.containerTool ?? "", ok: true)
+                status("container system", ad.systemRunning ? "running" : "not running (started automatically)", ok: true)
+                status("domain controller image",
+                       (ad.imageReference ?? "not built") + (ad.imageIsOutdated ? " — a build behind \(ADImage.reference)" : ""),
+                       ok: ad.imageReference != nil && !ad.imageIsOutdated)
+                status("state volume", ad.volumeExists ? "\(ad.volumeName) — adopted, never reprovisioned" : "not created yet", ok: true)
+                // An image built from an older Containerfile is an offer, never a refusal: the
+                // running domain controller goes on serving, and a rebuild changes nothing in
+                // the state volume. The one thing it cannot do is change a DC that is already
+                // up — which is why the sentence says so out loud.
+                if let reason = ad.imageRebuildReason { Text(reason).hint() }
+                if !ad.diskUsage.isEmpty { Text(ad.diskUsage).hint() }
+
+                if ad.imageReference == nil || ad.builder.isRunning || !ad.builder.log.isEmpty {
+                    ADStreamedCommand(title: ad.imageReference == nil ? "Build image" : "Rebuild image",
+                                      run: {
+                                          Task {
+                                              await ad.startBuilder()
+                                              ad.buildImage(context: ADImage.bundledContext)
+                                          }
+                                      },
+                                      process: ad.builder)
+                    Text("Builds \(ADImage.reference) — a couple of minutes.").hint()
+                } else {
+                    HStack(spacing: 8) {
+                        // **Not** disabled while the DC is running. A rebuild writes a new tag
+                        // and leaves the image the running container was created from alone, so
+                        // there is nothing here that a live domain can be hurt by — and telling
+                        // the owner of a running domain to stop it before he can even build the
+                        // fix is how a one-button upgrade becomes an outage.
+                        let rebuild = Button(ad.imageIsOutdated ? "Rebuild image (\(ADImage.reference))" : "Rebuild image") {
+                            Task {
+                                await ad.startBuilder()
+                                ad.buildImage(context: ADImage.bundledContext)
+                            }
+                        }
+                        if ad.imageIsOutdated {
+                            rebuild.buttonStyle(.borderedProminent)
+                        } else {
+                            rebuild.buttonStyle(.bordered)
+                        }
+                        Group {
+                            Button("Export image…") { exportImage() }.buttonStyle(.bordered)
+                            Button("Import image…") { importImage() }.buttonStyle(.bordered)
+                        }
+                        .disabled(ad.isRunning)
+                        Spacer()
+                    }
+                    .controlSize(.small)
+
+                }
+            }
+        }
+    }
+
+    private func status(_ label: String, _ value: String, ok: Bool) -> some View {
+        adStatus(label, value, ok: ok)
+    }
 
     private func exportImage() {
         let panel = NSSavePanel()
@@ -692,6 +727,21 @@ struct ADServerSections: View {
         panel.allowedContentTypes = [UTType(filenameExtension: "tar") ?? .data]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task { await ad.importImage(from: url) }
+    }
+}
+
+private func adStatus(_ label: String, _ value: String, ok: Bool) -> some View {
+    adField(label) {
+        HStack(spacing: 6) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(ok ? Theme.ok : Theme.warn)
+            Text(value)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(Theme.text2)
+                .lineLimit(1).truncationMode(.middle)
+                .textSelection(.enabled)
+        }
     }
 }
 
@@ -893,6 +943,7 @@ struct ADServerRow: View {
                          busy: ad.state.isBusy,
                          lockedHint: ServerPair.directorySwitchLockedHint(
                             radiusRunning: radius.isRunning),
+                         onUnavailable: { model.openEnvironment(for: .container) },
                          isOn: Binding(
                             get: { ServerPair.directorySwitchIsOn(directoryRunning: ad.isRunning,
                                                                   directoryStarting: model.directoryStarting) },
@@ -908,7 +959,7 @@ struct ADServerRow: View {
         case .running: model.applied.settings.ad.realm
         case .starting(let step): step
         case .failed: "failed"
-        case .stopped: model.tools.containerTool == nil ? "unavailable" : "off"
+        case .stopped: model.tools.containerTool == nil ? "not installed" : "off"
         }
     }
 
