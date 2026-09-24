@@ -14,10 +14,10 @@ over LDAP, and for a NAC doing PEAP-MSCHAPv2 against a generic LDAP source.
 no Homebrew, no LaunchDaemon, and nothing written outside
 `~/Library/Application Support/SheepRadius/`. Quitting the app stops both servers.
 
-[![Download SheepRadius for macOS](https://img.shields.io/badge/Download-SheepRadius_0.1_%2834%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepRadius/releases/latest)
+[![Download SheepRadius for macOS](https://img.shields.io/badge/Download-SheepRadius_2.0_%281%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepRadius/releases/latest)
 
 **[Get the latest release →](https://github.com/bestonehxh/SheepRadius/releases/latest)** — download
-`SheepRadius-0.1-34.zip`, unzip, and drag **SheepRadius.app** into `Applications`. The build is
+`SheepRadius-2.0-1.zip`, unzip, and drag **SheepRadius.app** into `Applications`. The build is
 unsigned: the first time, right-click it and choose **Open**.
 
 ## What it looks like
