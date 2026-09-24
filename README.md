@@ -1,121 +1,91 @@
+<p align="center">
+  <img src=".github/icon.png?v=3" width="128" alt="SheepRadius app icon">
+</p>
+
 # 🐑 SheepRadius
 
-**A native macOS control panel that turns your Mac into a throwaway RADIUS + LDAP lab — for
-testing 802.1X (wired and wireless), device logins and NAC.**
+**A native macOS RADIUS + LDAP lab built for network engineers — 802.1X (wired and wireless), device logins and NAC, on your Mac.**
 
-Add a switch or access point as a NAS client, list a few test users in OUs and groups, flip
-both servers on, and point the device at your Mac. One user table generates both the
-FreeRADIUS side (with VLAN assignment and per-group reply attributes) and an AD-shaped LDAP
-directory, so the same accounts work for 802.1X, for a device that authenticates its admins
-over LDAP, and for a NAC doing PEAP-MSCHAPv2 against a generic LDAP source.
+SheepRadius is written in SwiftUI + AppKit (Swift 6) and designed around the daily workflow of
+bringing up and troubleshooting authentication: add a switch or access point as a NAS client,
+create test users in OUs and groups, flip the servers on, and point the device at your Mac.
+The same accounts work for 802.1X, for a device that authenticates its admins over LDAP, and
+for a NAC doing PEAP-MSCHAPv2 against a generic LDAP source — or against a real Samba Active
+Directory domain that a Windows PC can join.
 
 **Everything is inside the app.** SheepRadius carries its own FreeRADIUS 3.2.10, OpenLDAP
 2.7.1 and OpenSSL 3.6.4 and runs them as child processes under your own account — no `sudo`,
 no Homebrew, no LaunchDaemon, and nothing written outside
-`~/Library/Application Support/SheepRadius/`. Quitting the app stops both servers.
+`~/Library/Application Support/SheepRadius/`. Quitting the app stops every server.
+
+## ⬇️ Download
 
 [![Download SheepRadius for macOS](https://img.shields.io/badge/Download-SheepRadius_2.0_%281%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepRadius/releases/latest)
 
-**[Get the latest release →](https://github.com/bestonehxh/SheepRadius/releases/latest)** — download
-`SheepRadius-2.0-1.zip`, unzip, and drag **SheepRadius.app** into `Applications`. The build is
-unsigned: the first time, right-click it and choose **Open**.
+**[Get the latest release →](https://github.com/bestonehxh/SheepRadius/releases/latest)** — download `SheepRadius-2.0-1.zip`, unzip, and drag **SheepRadius.app** into `Applications`.
 
-## What it looks like
+> The build is unsigned (not notarized), so macOS will warn on first launch —
+> right-click the app and choose **Open**, or run
+> `xattr -dr com.apple.quarantine /Applications/SheepRadius.app`
+>
+> Requires macOS 26.4 (Tahoe) or later, Apple Silicon. Samba AD mode also needs Apple's
+> `container` tool — the app installs it for you from the Environment page.
 
-The look is native macOS — a vibrant sidebar with no icons, grouped key–value lists with
-hairlines, real tables with an inspector beside them, one check at a time under Test.
+## The Sheep family 🐑
 
-Build 26 gave every pane an **editorial heading**: a small eyebrow, one large line that states
-the state in words ("lab.sheep is up.", "Everything is stopped.", "One directory.", "One check
-at a time."), one sentence under it, and the pane's own buttons on the right of it.
+SheepRadius is one of seven small native macOS apps that share the same sheep icon set:
 
-Build 27 keeps directory objects where an administrator expects them. **Computers** is a row in
-the Users tree beside the OUs, with Account, Joined, Last seen and Status columns; Status keeps
-only the joined-computer count instead of a second copy of the table. The repeated domain facts
-card is gone from Users and Groups. Ordinary accounts in Active Directory's default `CN=Users`
-container can be edited, moved, renamed, assigned to groups and deleted; only the actual built-in
-accounts remain protected.
+|  | App | What it does |
+|---|---|---|
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepDrop/main/.github/icon.png?v=3" width="44" alt=""> | [SheepDrop](https://github.com/bestonehxh/SheepDrop) | SFTP / SCP / FTP / TFTP file transfer — client and built-in server |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepTerm/main/.github/icon.png?v=3" width="44" alt=""> | [SheepTerm](https://github.com/bestonehxh/SheepTerm) | SSH / Serial / local-shell terminal for network engineers |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepTap/main/.github/icon.png?v=3" width="44" alt=""> | [SheepTap](https://github.com/bestonehxh/SheepTap) | Menu-bar viewer for your Mac's network interfaces with click-to-copy |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepPing/main/.github/icon.png?v=3" width="44" alt=""> | [SheepPing](https://github.com/bestonehxh/SheepPing) | Continuous multi-host ping monitor with per-host logs and CSV export |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepText/main/.github/icon.png?v=3" width="44" alt=""> | [SheepText](https://github.com/bestonehxh/SheepText) | Fast text editor with tree-sitter highlighting and a JavaScript plugin system |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepArt/main/.github/icon.png?v=3" width="44" alt=""> | [SheepArt](https://github.com/bestonehxh/SheepArt) | Screenshot annotation — draw, crop, layers, one-key background removal |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepRadius/main/.github/icon.png?v=3" width="44" alt=""> | [SheepRadius](https://github.com/bestonehxh/SheepRadius) | RADIUS + LDAP lab for 802.1X, device logins and NAC — with a joinable Samba AD |
 
-Build 28 lets each directory account use an explicit **userPrincipalName**, including alternate
-suffixes such as `stu.lab.sheep` and `guest.lab.sheep`; Samba AD registers a newly used suffix in
-the forest before assigning it. It also moves Samba's pinned dynamic-RPC range below macOS's
-ephemeral range, avoiding the `rapportd` collision on TCP 49152 while checking every RPC port
-before the domain controller starts.
+## Features
 
-Build 29 makes the AD startup readiness probe use the container's published loopback socket.
-The LAN address remains what devices use, but a Wi-Fi network that cannot hairpin this Mac back
-to its own LAN address can no longer leave the app showing Starting after Samba is already up.
+### RADIUS
+- **PAP, CHAP, MS-CHAP, EAP-MD5, PEAP, EAP-TTLS and EAP-TLS** on udp/1812 and udp/1813,
+  against a test CA the app creates for you (825-day server certificate, exportable CA)
+- **VLANs and vendor attributes** — `Tunnel-Private-Group-Id` plus anything from the stock
+  dictionaries (`Filter-Id`, `Class`, `Fortinet-Group-Name`, `Aruba-User-Role`, `Cisco-AVPair`, …)
+- **Conditional policy** — *if* the user is in a group or OU, on an SSID or AP group, on a
+  given switch, on Ethernet or Wi-Fi, from a MAC, inside a time window, *then* set a VLAN,
+  add reply attributes, set a Session-Timeout, or reject. Ordered first-match-wins like an
+  ACL, and shown as the real unlang it becomes. See [Conditional policy](#policy)
+- **Client certificates for EAP-TLS** — issue, export as `.p12`, and revoke from the Users pane
 
-Build 30 uses Samba's dedicated OU rename command and recursive OU deletion flag, so renaming
-an OU and deleting a parent OU with child OUs now updates the AD tree as expected.
+### Directory — OpenLDAP or a real Active Directory
+- **OpenLDAP** on tcp/389 and LDAPS on 636, AD-shaped: nested OUs, `groupOfNames` groups,
+  `sAMAccountName`, `userPrincipalName`, `memberOf`, and NT hashes for NAC servers
+- **Samba AD** — a Samba 4 domain controller in a Linux container that a Windows PC can
+  genuinely join, with DNS served from your Mac. See [AD Domain mode](#ad-domain-mode)
+- **Users and Groups like ADUC** — an OU tree, real tables and an inspector with the General,
+  Address, Telephones and Organization fields; every edit applies at once, and RADIUS picks
+  it up without a restart
+- **Per-product settings tables** — what to type into iMaster NCE-Campus, ClearPass, Windows,
+  FortiGate or a generic LDAP form, every value live and copyable
 
-Build 31 checks AD readiness inside the Samba container, avoiding a false indefinite wait when
-Apple Container's host port proxy is up before its bridge forwarding is reachable.
+### Seeing what happened
+- **Recent authentications** — every attempt, whichever server it reached: RADIUS accepts and
+  rejects with the reason, LDAP binds, domain logins, and the requests RADIUS never answers
+  (a device that is not a client, a wrong shared secret)
+- **A readable log** — times on every line, results highlighted, noise faded, and *Auth only*
+  for RADIUS, LDAP and the domain controller
+- **A RADIUS / LDAP / 802.1X test client** — aim it at this Mac *or at somebody else's
+  server*: verdict, round-trip time, reply attributes in plain words, TLS version and the
+  server's certificate chain. See [Testing someone else's server](#testing-someone-elses-server)
+- **Address-change notice** — Status tells you when this Mac's address changed, because every
+  device you pointed here was pointed by hand
 
-**One width rule, everywhere.** A pane is its column plus a gutter that grows with the window
-(3 % of the pane, between 20 and 96 pt), and that is now true of the table panes as well as the
-grouped ones. On Users the OU tree is 240 pt and grows to 320 on a wide window, the inspector is
-300 pt and folds into a toolbar button on anything narrower than a 1312 pt window, and the table
-takes the rest — with its four columns proportional and `Enabled` fixed, so none of them can be
-dropped. There are **no alternating row stripes** anywhere: plain rows with hairlines, and an
-empty table is one sentence rather than twenty empty rows.
-
-## What you get
-
-- **RADIUS** on udp/1812 (auth) and udp/1813 (accounting) — PAP, CHAP, MS-CHAP, EAP-MD5, and
-  PEAP / EAP-TTLS / EAP-TLS against a test CA the app creates for you (825-day server
-  certificate, exportable CA for clients that validate it).
-- **A supplicant simulator** — test PEAP-MSCHAPv2, EAP-TTLS and EAP-TLS end to end from the
-  Test pane, with an anonymous outer identity and real certificate validation, without
-  borrowing a laptop. The other five checks are PAP, MS-CHAP, EAP-MD5 and an LDAP or LDAPS
-  bind; each runs the thing it is named after, or refuses and says why.
-- **LDAP** on tcp/389 — nested OUs, `groupOfNames` groups, and AD-style attributes
-  (`sAMAccountName`, `userPrincipalName`, `memberOf`) so a device configured for Active
-  Directory finds what it expects. **This is the one place accounts live**: Users and Groups
-  edit the running directory, and RADIUS checks passwords against it. A user's editor can give
-  each account its own UPN suffix (for example `student@stu.lab.sheep`); Samba AD registers a
-  new suffix as an alternate UPN suffix automatically before saving the account.
-- **Two switches, one pair — and the pair is RADIUS + OpenLDAP.** The sidebar has **RADIUS**
-  and **LDAP**, each with its own switch, and under the LDAP one the choice of **OpenLDAP** or
-  **Samba AD**. Turning RADIUS on starts a directory first — there is nowhere else for it to
-  read accounts from — and the one it starts is **OpenLDAP**, whichever backend the chooser
-  was left on, because it is 16 MB against a domain controller's container and a RADIUS lab
-  rarely wants the second one. The chooser moves to OpenLDAP with it, so what the sidebar
-  says is what is running, and if the LDAP switch under Directory ▸ Server was off it is
-  turned on rather than refused. **A Samba AD that is already running is used as it is** —
-  nothing is stopped and nothing is restarted. To run RADIUS against the domain, start Samba
-  AD first — the LDAP switch, **Start all**, or just opening Users — and turn RADIUS on
-  afterwards. Only the RADIUS switch pins: **Start all** starts the backend the chooser
-  names, because that is the whole-lab button and a lab set to Samba AD means it.
-  While RADIUS is running the LDAP switch and the backend chooser are **greyed out and
-  inert**, with "Stop RADIUS first." once under the chooser, because a RADIUS server with no
-  directory rejects everybody; LDAP on its own is fine, and Stop all still stops both.
-- **Opening Users or Groups starts LDAP.** Those two panes are the directory, so they bring it
-  up by themselves — the same start the switch does, with the same port checks and the same
-  refusals — and show "Starting OpenLDAP…" while it happens, or the reason and a **Retry**
-  button if it will not come up. Leaving the pane never stops it. Unlike the RADIUS switch
-  these two start **the backend you chose**: picking Samba AD and opening Users is how you say
-  you want the domain.
-- **Or a real Active Directory domain** — switch the LDAP directory to **Samba AD** and the
-  app runs a Samba 4 domain controller in a Linux container that a Windows PC can genuinely
-  join. See [AD Domain mode](#ad-domain-mode).
-- **VLANs and vendor attributes per group** — `Tunnel-Private-Group-Id` plus anything from
-  the stock dictionaries (`Filter-Id`, `Class`, `Fortinet-Group-Name`, `Aruba-User-Role`,
-  `Cisco-AVPair`, …).
-- **Conditional rules** — *if* the user is in a group, in an OU, on a given SSID, on a given
-  switch, on Ethernet or Wi-Fi, from a MAC, inside a time window, *then* set a VLAN, add reply
-  attributes, set a Session-Timeout, or reject. Ordered, first-match-wins like an ACL, and
-  they become real `if (…) { update reply { … } }` unlang you can read in the pane. See
-  [Conditional policy](#conditional-policy).
-- **Per-product settings tables** — Device settings gives you a two-column "field in the device
-  → value" table for iMaster NCE-Campus, ClearPass, Windows, FortiGate and generic LDAP forms.
-  Every value is copyable and live, so it is never a stale example.
-- **It tells you when this Mac's address changes** — the Status pane keeps a "changed from A to
-  B" notice until you dismiss it, because every device you pointed here was pointed by hand.
-- **Live accept/reject feed** scraped out of radiusd's debug stream, plus the full log.
-- **A RADIUS / LDAP test client** — aim it at this Mac *or at somebody else's server*, with
-  credentials picked from the directory or typed by hand. Verdict, round-trip time, the reply attributes
-  read back in plain words. See [Testing someone else's server](#testing-someone-elses-server).
+### The lab itself
+- **Environment page** — every component and every install in one place, with a percentage
+  and the current step while it runs; starting anything that is missing takes you there
+- **One file per lab** — move a whole lab, domain included, to another Mac, with automatic
+  backups before anything destructive
 
 ## Requirements
 
