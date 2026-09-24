@@ -73,7 +73,7 @@ SCHEMAS="core cosine inetorgperson nis"
 for m in $RLM $FRLIBS; do need "$FR/lib/$m" "Reinstall freeradius-server."; done
 for s in $SCHEMAS; do need "/opt/homebrew/etc/openldap/schema/$s.schema" "Reinstall openldap."; done
 
-rm -rf "$HELPERS" "$RES/freeradius" "$RES/openldap" "$RES/openssl" "$FW/ossl-modules"
+rm -rf "$HELPERS" "$RES/freeradius" "$RES/openldap" "$RES/openssl" "$FW/ossl-modules" "$RES/Licenses"
 mkdir -p "$FW" "$FW/ossl-modules" "$HELPERS" "$RES/freeradius" "$RES/openldap/schema" "$RES/openssl" "$RES/ad-image"
 
 # ---- copy -------------------------------------------------------------------
@@ -98,6 +98,52 @@ cp -f /opt/homebrew/opt/readline/lib/libreadline.8.dylib "$FW/"
 cp -f "$FR"/share/freeradius/* "$RES/freeradius/"
 for s in $SCHEMAS; do cp -f "/opt/homebrew/etc/openldap/schema/$s.schema" "$RES/openldap/schema/"; done
 
+# ---- licences (2.0 (2)) ------------------------------------------------------
+# Every program and library above is distributed inside the .app, and every one of their
+# licences requires its text to travel with the binary. Copied from each Homebrew keg, so the
+# text is the one for the version bundled; eapol_test's comes from Vendor/, beside the binary.
+# The exact sources (and Homebrew's patches) are attached to the `sources-2.0` GitHub Release.
+LIC="$RES/Licenses"
+mkdir -p "$LIC"
+copy_licence() {  # copy_licence <name> <keg> <file>...
+  local name="$1" keg="$2"; shift 2
+  mkdir -p "$LIC/$name"
+  for f in "$@"; do
+    need "$keg/$f" "The $name licence is missing from Homebrew's keg."
+    cp -f "$keg/$f" "$LIC/$name/"
+  done
+}
+copy_licence "FreeRADIUS-3.2.10"  "$FR"                        COPYRIGHT LICENSE
+copy_licence "OpenLDAP-2.7.1"     "$OL"                        COPYRIGHT LICENSE
+copy_licence "OpenSSL-3.6.4"      /opt/homebrew/opt/openssl@3  LICENSE.txt
+copy_licence "talloc-2.5.0"       /opt/homebrew/opt/talloc     LICENSE
+copy_licence "readline-8.3"       /opt/homebrew/opt/readline   COPYING
+need "${SRCROOT}/Vendor/eapol_test.COPYING" "Vendor/eapol_test.COPYING is missing."
+mkdir -p "$LIC/wpa_supplicant-2.11"
+cp -f "${SRCROOT}/Vendor/eapol_test.COPYING" "$LIC/wpa_supplicant-2.11/COPYING"
+cat > "$LIC/README.txt" <<'TXT'
+SheepRadius bundles these third-party programs and libraries, unmodified except that their
+load paths are rewritten to point inside the app. Each remains under its own licence, whose
+text is in the folder of the same name.
+
+  FreeRADIUS 3.2.10     GPL-2.0-or-later (libfreeradius-radius: LGPL-2.1-or-later)
+  OpenLDAP 2.7.1        OpenLDAP Public License 2.8
+  OpenSSL 3.6.4         Apache-2.0
+  talloc 2.5.0          LGPL-3.0-or-later
+  GNU Readline 8.3 (+ patches 001-006)   GPL-3.0-or-later
+  wpa_supplicant 2.11 (eapol_test)       BSD-3-Clause
+
+radiusd, radclient and radeapclient link GNU Readline and are therefore distributed under the
+terms of the GNU GPL version 3 (FreeRADIUS is GPL-2.0-or-later).
+
+The complete corresponding source for every component above, with the patches Homebrew
+applied when building it and SheepRadius's own build scripts, is published at:
+
+  https://github.com/bestonehxh/SheepRadius/releases/tag/sources-2.0
+
+SheepRadius itself is MIT-licensed: https://github.com/bestonehxh/SheepRadius
+TXT
+
 # AD Domain mode's build context: the Containerfile and the two scripts that go into the
 # Samba AD DC image. They live OUTSIDE the synchronized source folder on purpose — Xcode
 # would otherwise also drop them loose into Resources/ — and are copied here so a release
@@ -107,7 +153,7 @@ for f in Containerfile entrypoint.sh fix-dns.sh; do
   cp -f "${SRCROOT}/ADImage/$f" "$RES/ad-image/"
 done
 
-chmod -R u+w "$HELPERS" "$FW" "$RES/freeradius" "$RES/openldap" "$RES/openssl" "$RES/ad-image"
+chmod -R u+w "$HELPERS" "$FW" "$RES/freeradius" "$RES/openldap" "$RES/openssl" "$RES/ad-image" "$LIC"
 
 # This OpenSSL has OPENSSLDIR=/opt/homebrew/etc/openssl@3 compiled in. On a Mac without
 # Homebrew that path does not exist; on one WITH it, the user's own openssl.cnf would

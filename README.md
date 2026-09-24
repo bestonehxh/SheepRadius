@@ -20,9 +20,9 @@ no Homebrew, no LaunchDaemon, and nothing written outside
 
 ## ⬇️ Download
 
-[![Download SheepRadius for macOS](https://img.shields.io/badge/Download-SheepRadius_2.0_%281%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepRadius/releases/latest)
+[![Download SheepRadius for macOS](https://img.shields.io/badge/Download-SheepRadius_2.0_%282%29_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepRadius/releases/latest)
 
-**[Get the latest release →](https://github.com/bestonehxh/SheepRadius/releases/latest)** — download `SheepRadius-2.0-1.zip`, unzip, and drag **SheepRadius.app** into `Applications`.
+**[Get the latest release →](https://github.com/bestonehxh/SheepRadius/releases/latest)** — download `SheepRadius-2.0-2.zip`, unzip, and drag **SheepRadius.app** into `Applications`.
 
 > The build is unsigned (not notarized), so macOS will warn on first launch —
 > right-click the app and choose **Open**, or run
@@ -650,17 +650,24 @@ and before switching the directory backend.
 ## Third-party software
 
 The app bundle carries these programs and libraries, unmodified except that their load paths are
-rewritten to point inside the bundle. Each remains under its own licence; the source for the
-exact version is at the link.
+rewritten to point inside the bundle. Each remains under its own licence. The licence texts are
+inside the app at `SheepRadius.app/Contents/Resources/Licenses/` (Environment ▸ Open-source
+licences ▸ Show), and the **complete corresponding source** for every one — the upstream
+tarballs, the patches Homebrew applied and the scripts that bundle them — is published in the
+[sources-2.0 release](https://github.com/bestonehxh/SheepRadius/releases/tag/sources-2.0).
 
-| Component | Version | Licence | Source |
-|---|---|---|---|
-| FreeRADIUS server | 3.2.10 | GPL-2.0 | https://github.com/FreeRADIUS/freeradius-server/releases/tag/release_3_2_10 |
-| OpenLDAP | 2.7.1 | OpenLDAP Public License 2.8 | https://www.openldap.org/software/download/ |
-| OpenSSL | 3.6.4 | Apache-2.0 | https://github.com/openssl/openssl/releases/tag/openssl-3.6.4 |
-| talloc | Homebrew build | LGPL-3.0 | https://www.samba.org/ftp/talloc/ |
-| GNU Readline | 8 | GPL-3.0 | https://ftp.gnu.org/gnu/readline/ |
-| wpa_supplicant (`eapol_test`) | 2.11 | BSD-3-Clause | https://w1.fi/releases/wpa_supplicant-2.11.tar.gz |
+| Component | Version | Licence |
+|---|---|---|
+| FreeRADIUS server | 3.2.10 | GPL-2.0-or-later (libfreeradius-radius: LGPL-2.1-or-later) |
+| OpenLDAP | 2.7.1 | OpenLDAP Public License 2.8 |
+| OpenSSL | 3.6.4 | Apache-2.0 |
+| talloc | 2.5.0 | LGPL-3.0-or-later |
+| GNU Readline | 8.3 + patches 001–006 | GPL-3.0-or-later |
+| wpa_supplicant (`eapol_test`) | 2.11 | BSD-3-Clause |
+
+`radiusd`, `radclient` and `radeapclient` link GNU Readline and are therefore distributed under
+the GNU GPL version 3, which FreeRADIUS's "or later" licence allows. SheepRadius's own code runs
+these servers as separate programs and is MIT-licensed.
 
 ## Acknowledgements
 

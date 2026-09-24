@@ -119,6 +119,18 @@ struct EnvironmentView: View {
                         .buttonStyle(.borderless)
                 }
             }
+            // Build 2.0 (2): the licence of every bundled server travels inside the app.
+            KeyValueRow("Open-source licences") {
+                HStack(spacing: 8) {
+                    Text("FreeRADIUS, OpenLDAP, OpenSSL, talloc, Readline, wpa_supplicant")
+                        .font(.system(size: 12)).foregroundStyle(Theme.text2)
+                        .lineLimit(1).truncationMode(.tail)
+                    if let licences = Bundle.main.url(forResource: "Licenses", withExtension: nil) {
+                        Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([licences]) }
+                            .buttonStyle(.borderless)
+                    }
+                }
+            }
             NoteRow(text: "Lab use only. Passwords are stored in cleartext because PEAP-MSCHAPv2 needs them.", systemImage: "info.circle")
         }
     }
