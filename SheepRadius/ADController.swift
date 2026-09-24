@@ -96,6 +96,14 @@ final class ADController: ObservableObject {
 
     /// The streamed installer/builder, reusing the card the Homebrew installer uses.
     let builder = ServerProcess(title: "container")
+    /// How far Build image has got, and since when (build 33). Set the moment the button is
+    /// pressed — the container system and the builder take up to a minute to start and print
+    /// nothing, which is exactly when the pane used to look stuck.
+    @Published private(set) var buildProgress: ImageBuildProgress?
+    @Published private(set) var buildStarted: Date?
+    /// Export / import of the image: no output to count, so a named step and a clock.
+    @Published private(set) var imageTransfer: TaskProgress?
+    @Published private(set) var imageTransferStarted: Date?
     /// Surfaces a failure in the app's single alert. A closure rather than a reference to
     /// `AppModel.shared`, because this object is created *inside* `AppModel.init`.
     var onError: ((String) -> Void)?
@@ -1348,7 +1356,14 @@ final class ADController: ObservableObject {
         guard let tool = tools.containerTool, !builder.isRunning else { return }
         builder.clearLog()
         let arguments = ADImage.buildArguments(context: context.path, reference: ADImage.reference)
-        builder.onExit = { [weak self] _ in
+        if buildProgress == nil { buildProgress = ImageBuildProgress(); buildStarted = Date() }
+        builder.onLines = { [weak self] lines in
+            guard let self, var progress = self.buildProgress else { return }
+            for line in lines { progress.ingest(line) }
+            self.buildProgress = progress
+        }
+        builder.onExit = { [weak self] status in
+            self?.buildProgress?.finish(success: status == 0)
             guard let self, let tool = self.tools.containerTool else { return }
             Task {
                 // The buildkit helper stays up after a build — 2 CPU and 2 GB of nothing.
@@ -1361,13 +1376,19 @@ final class ADController: ObservableObject {
 
     func startBuilder() async {
         guard let tool = tools.containerTool else { return }
+        buildProgress = ImageBuildProgress()
+        buildStarted = Date()
         _ = await Shell.run(tool, ["system", "start", "--enable-kernel-install"], environment: [:])
         _ = await Shell.run(tool, ADImage.builderStartArguments, environment: [:])
     }
 
     func exportImage(to url: URL) async {
         guard let tool = tools.containerTool, let reference = imageReference else { return }
+        imageTransfer = TaskProgress(title: "Exporting \(reference) to \(url.lastPathComponent)")
+        imageTransferStarted = Date()
         let run = await Shell.run(tool, ADImage.saveArguments(reference: reference, to: url.path), environment: [:])
+        imageTransfer = run.ok ? TaskProgress(title: "Exported to \(url.lastPathComponent)", fraction: 1, state: .done)
+                               : TaskProgress(title: "Export failed", state: .failed)
         if run.ok {
             let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
             let size = (attributes?[.size] as? Int) ?? 0
@@ -1379,7 +1400,11 @@ final class ADController: ObservableObject {
 
     func importImage(from url: URL) async {
         guard let tool = tools.containerTool else { return }
+        imageTransfer = TaskProgress(title: "Importing \(url.lastPathComponent)")
+        imageTransferStarted = Date()
         let run = await Shell.run(tool, ADImage.loadArguments(from: url.path), environment: [:])
+        imageTransfer = run.ok ? TaskProgress(title: "Imported \(url.lastPathComponent)", fraction: 1, state: .done)
+                               : TaskProgress(title: "Import failed", state: .failed)
         if run.ok {
             note("—— imported \(url.lastPathComponent)")
             await refreshPrerequisites()

@@ -640,7 +640,9 @@ struct ADPrerequisitesCard: View {
                 if model.tools.brew != nil {
                     ADStreamedCommand(title: "Install container with Homebrew",
                                       run: { model.installWithHomebrew(["container"]) },
-                                      process: model.installer)
+                                      process: model.installer,
+                                      progress: model.installProgress?.display,
+                                      started: model.installStarted)
                 } else {
                     HStack(spacing: 8) {
                         CopyButton("Copy install command", value: "brew install container",
@@ -666,7 +668,8 @@ struct ADPrerequisitesCard: View {
                 if let reason = ad.imageRebuildReason { Text(reason).hint() }
                 if !ad.diskUsage.isEmpty { Text(ad.diskUsage).hint() }
 
-                if ad.imageReference == nil || ad.builder.isRunning || !ad.builder.log.isEmpty {
+                if ad.imageReference == nil || ad.builder.isRunning || !ad.builder.log.isEmpty
+                    || ad.buildProgress != nil {
                     ADStreamedCommand(title: ad.imageReference == nil ? "Build image" : "Rebuild image",
                                       run: {
                                           Task {
@@ -674,7 +677,9 @@ struct ADPrerequisitesCard: View {
                                               ad.buildImage(context: ADImage.bundledContext)
                                           }
                                       },
-                                      process: ad.builder)
+                                      process: ad.builder,
+                                      progress: ad.buildProgress?.display,
+                                      started: ad.buildStarted)
                     Text("Builds \(ADImage.reference) — a couple of minutes.").hint()
                 } else {
                     HStack(spacing: 8) {
@@ -698,11 +703,13 @@ struct ADPrerequisitesCard: View {
                             Button("Export image…") { exportImage() }.buttonStyle(.bordered)
                             Button("Import image…") { importImage() }.buttonStyle(.bordered)
                         }
-                        .disabled(ad.isRunning)
+                        .disabled(ad.isRunning || ad.imageTransfer?.state == .running)
                         Spacer()
                     }
                     .controlSize(.small)
-
+                    if let transfer = ad.imageTransfer {
+                        TaskProgressRow(progress: transfer, started: ad.imageTransferStarted)
+                    }
                 }
             }
         }
@@ -750,20 +757,31 @@ struct ADStreamedCommand: View {
     let title: String
     let run: () -> Void
     @ObservedObject var process: ServerProcess
+    /// Build 33: a percentage, what it is doing, and how long it has taken — for Build image
+    /// and for every `brew install`.
+    var progress: TaskProgress? = nil
+    var started: Date? = nil
+
+    /// Pressed and not finished — which includes the silent minute before the process exists.
+    private var busy: Bool {
+        if process.isRunning { return true }
+        return progress?.state == .running
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Button(title, action: run)
                     .buttonStyle(.borderedProminent).tint(Theme.accent)
-                    .disabled(process.isRunning)
-                if process.isRunning {
+                    .disabled(busy)
+                if busy, progress == nil {
                     ProgressView().controlSize(.small)
                     Text("This takes a few minutes.").hint()
                 }
                 Spacer()
             }
             .controlSize(.small)
+            if let progress { progressRow(progress) }
             if !process.log.isEmpty {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -783,6 +801,61 @@ struct ADStreamedCommand: View {
                     .background(RoundedRectangle(cornerRadius: Metrics.field).fill(Theme.well))
                     .onChange(of: process.log.count) {
                         if let last = process.log.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The bar, the percentage, the step in words and a running clock. The clock ticks every
+    /// second on its own, so even the one step with no output — the builder starting — is
+    /// visibly alive.
+    private func progressRow(_ progress: TaskProgress) -> some View {
+        TaskProgressRow(progress: progress, started: started)
+    }
+
+    static func elapsed(since start: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+/// The status line under every install on the Environment pane (build 33): a bar — counted
+/// when there is something to count, moving when there is not — the percentage, the step in
+/// words, and a clock that ticks by itself so a silent step still looks alive.
+struct TaskProgressRow: View {
+    let progress: TaskProgress
+    let started: Date?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            VStack(alignment: .leading, spacing: 4) {
+                if let fraction = progress.fraction {
+                    ProgressView(value: fraction).tint(Theme.accent)
+                } else if progress.state == .running {
+                    ProgressView().progressViewStyle(.linear).tint(Theme.accent)
+                }
+                HStack(spacing: 6) {
+                    if progress.state == .running, let percent = progress.percent {
+                        Text("\(percent)%").font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    }
+                    if progress.state == .done {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.ok)
+                    } else if progress.state == .failed {
+                        Image(systemName: "xmark.octagon.fill").foregroundStyle(Theme.err)
+                    }
+                    Text(progress.title)
+                        .font(.system(size: 12))
+                        .foregroundStyle(progress.state == .failed ? Theme.err : Theme.text2)
+                        .lineLimit(1).truncationMode(.middle)
+                    if let detail = progress.detail {
+                        Text("· " + detail).font(.system(size: 12)).foregroundStyle(Theme.faintText)
+                    }
+                    Spacer(minLength: 0)
+                    if let started, progress.state == .running {
+                        Text(ADStreamedCommand.elapsed(since: started, now: context.date))
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(Theme.faintText)
                     }
                 }
             }

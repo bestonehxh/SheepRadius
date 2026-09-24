@@ -1,15 +1,5 @@
 import Foundation
 
-/// Locates the external binaries the app drives.
-///
-/// FreeRADIUS and OpenLDAP are both looked for **inside the app bundle first** (the
-/// "Bundle servers" build phase copies them out of Homebrew and rewrites their install
-/// names), then in Homebrew — so a release build runs on a Mac with no Homebrew at all,
-/// while a plain `xcodebuild` without that phase still works on this one.
-///
-/// Nothing falls back to a macOS-supplied copy: not `/usr/libexec/slapd` (OpenLDAP 2.4.28
-/// from 2011), not `/usr/bin/ldapsearch`, not `/usr/bin/openssl` (LibreSSL). Everything the
-/// app drives is one known version, bundled, so every Mac behaves identically.
 /// One installable thing on the Environment pane. A start that fails because one of these is
 /// missing opens that pane with the item highlighted, rather than leaving the person to find
 /// the install button three panes away.
@@ -27,6 +17,16 @@ nonisolated enum EnvironmentItem: String, Sendable, CaseIterable {
     }
 }
 
+/// Locates the external binaries the app drives.
+///
+/// FreeRADIUS and OpenLDAP are both looked for **inside the app bundle first** (the
+/// "Bundle servers" build phase copies them out of Homebrew and rewrites their install
+/// names), then in Homebrew — so a release build runs on a Mac with no Homebrew at all,
+/// while a plain `xcodebuild` without that phase still works on this one.
+///
+/// Nothing falls back to a macOS-supplied copy: not `/usr/libexec/slapd` (OpenLDAP 2.4.28
+/// from 2011), not `/usr/bin/ldapsearch`, not `/usr/bin/openssl` (LibreSSL). Everything the
+/// app drives is one known version, bundled, so every Mac behaves identically.
 nonisolated struct Toolchain: Equatable, Sendable {
     enum RadiusSource: String, Sendable {
         case bundled, homebrew
@@ -418,5 +418,81 @@ nonisolated enum Shell {
                 cont.resume(returning: Result(status: p.terminationStatus, output: String(decoding: data, as: UTF8.self)))
             }
         }
+    }
+}
+
+
+// MARK: - What an install is doing (build 33)
+
+/// **One shape for every long-running install on the Environment pane** (owner: "ในส่วนที่ต้อง
+/// Install ก็ใส่ไปให้หมด จะได้รู้ status"): what it is doing in words, a fraction when there is
+/// something to count, and whether it has ended. `ImageBuildProgress`, `BrewInstallProgress` and
+/// the image export/import all end up here, so the card draws them the same way.
+nonisolated struct TaskProgress: Equatable, Sendable {
+    enum State: Sendable { case running, done, failed }
+    var title: String
+    /// nil = nothing countable yet: an indeterminate bar, never a 0 % that looks stuck.
+    var fraction: Double?
+    var detail: String?
+    var state: State = .running
+
+    var percent: Int? { fraction.map { Int(($0 * 100).rounded(.down)) } }
+}
+
+/// `brew install <formulae>`, read line by line. Homebrew 7 through a pipe prints no download
+/// bar, but it does name every formula it is about to pour, so the count of poured formulae
+/// against the plan is an honest percentage:
+///
+///     ==> Fetching downloads for: container
+///     ==> Installing dependencies for wget: libidn2, libpsl and openssl@4
+///     ==> Pouring libidn2--2.3.8.arm64_tahoe.bottle.tar.gz
+///     🍺  /opt/homebrew/Cellar/container/1.4.1: 29 files, 429.8MB
+nonisolated struct BrewInstallProgress: Equatable, Sendable {
+    private(set) var total: Int
+    private(set) var poured = 0
+    private var phase = "Asking Homebrew what to install"
+    private var finished: TaskProgress.State = .running
+
+    init(formulae: [String]) { total = max(formulae.count, 1) }
+
+    mutating func ingest(_ raw: String) {
+        let line = TerminalText.clean(raw)
+        if let r = line.range(of: "Installing dependencies for ") {
+            let rest = line[r.upperBound...]
+            if let colon = rest.firstIndex(of: ":") {
+                total += Self.names(in: String(rest[rest.index(after: colon)...])).count
+            }
+        }
+        if let r = line.range(of: "Fetching downloads for: ") {
+            total = max(total, Self.names(in: String(line[r.upperBound...])).count)
+        }
+        if line.contains("==> Fetching") || line.contains("==> Downloading") || line.contains("✔︎ Bottle") {
+            phase = "Downloading from Homebrew"
+        }
+        if line.contains("==> Pouring ") {
+            poured += 1
+            phase = "Installing " + (line.components(separatedBy: "==> Pouring ").last?
+                .components(separatedBy: "--").first ?? "")
+        }
+        if line.contains("==> Caveats") || line.contains("==> Running `brew cleanup") { phase = "Tidying up" }
+    }
+
+    mutating func finish(success: Bool) { finished = success ? .done : .failed }
+
+    var display: TaskProgress {
+        switch finished {
+        case .done: TaskProgress(title: "Installed", fraction: 1, state: .done)
+        case .failed: TaskProgress(title: "Homebrew stopped with an error — the output is below", fraction: nil, state: .failed)
+        case .running:
+            TaskProgress(title: phase,
+                         fraction: poured == 0 ? nil : min(0.05 + 0.9 * Double(poured) / Double(total), 0.99),
+                         detail: total > 1 ? "\(min(poured, total)) of \(total) packages" : nil)
+        }
+    }
+
+    /// "libidn2, libpsl and openssl@4" → three names.
+    static func names(in list: String) -> [String] {
+        list.replacingOccurrences(of: " and ", with: ", ")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 }

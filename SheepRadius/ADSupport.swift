@@ -65,7 +65,10 @@ nonisolated enum ADImage {
     /// image is pulled for every platform in the index (riscv64, s390x, ppc64le…) — 19.9 GB
     /// in the spike, against ~100 MB for arm64 alone.
     static func buildArguments(context: String, reference: String) -> [String] {
-        ["build", "--platform", "linux/arm64", "-t", reference, "-f", context + "/Containerfile", context]
+        // `--progress plain` (build 33): one line per event, which is what `ImageBuildProgress`
+        // reads — and measured to arrive line by line through a pipe, unlike the DC's log.
+        ["build", "--progress", "plain", "--platform", "linux/arm64", "-t", reference,
+         "-f", context + "/Containerfile", context]
     }
 
     /// The buildkit helper container the build needs; it has no DNS of its own.
@@ -1241,5 +1244,132 @@ nonisolated enum ADDeviceGuide {
     static func verificationCommands(realm: String) -> [(label: String, command: String)] {
         [("Windows: check the DC records", "nslookup -type=SRV _ldap._tcp.dc._msdcs.\(realm)"),
          ("Windows: force DC discovery", "nltest /dsgetdc:\(realm) /force")]
+    }
+}
+
+
+// MARK: - How far a `container build` has got (build 33)
+
+/// **A percentage for Build image** (owner: "มันนิ่งไปเลย บางคนอาจจะไม่รู้"). Read from the
+/// `--progress plain` stream, measured on container 1.4.1 building on Debian 13:
+///
+///     #5 [linux/arm64 1/2] RUN apt-get update && apt-get install …
+///     #5 11.64 0 upgraded, 7 newly installed, 0 to remove and 0 not upgraded.
+///     #5 11.64 Need to get 1710 kB of archives.
+///     #5 11.64 Get:1 http://deb.debian.org/debian trixie/main arm64 libunistring5 arm64 1.3-2 [453 kB]
+///     #5 12.09 Unpacking libunistring5:arm64 (1.3-2) ...
+///     #5 12.23 Setting up netcat-openbsd (1.229-1) ...
+///     #9 exporting to oci image format
+///
+/// The apt step is nearly all of the time, so it is most of the bar: downloading by **bytes**
+/// against "Need to get", then unpacking and setting up by **package** against "newly
+/// installed". Before the first line there is the container system and the builder to start,
+/// which say nothing at all for up to a minute — that phase has a name and no number, rather
+/// than a 0 % that looks stuck. The fraction only ever grows.
+nonisolated struct ImageBuildProgress: Equatable, Sendable {
+    enum Phase: String, Sendable {
+        case preparing = "Starting the container system and the builder"
+        case base = "Fetching the Debian base image"
+        case index = "Reading the package lists"
+        case download = "Downloading Samba packages"
+        case install = "Installing Samba packages"
+        case finishing = "Finishing the image"
+        case saving = "Saving the image"
+        case done = "Done"
+        case failed = "The build failed — the output is below"
+    }
+
+    private(set) var phase: Phase = .preparing
+    /// nil while nothing measurable has happened yet.
+    private(set) var fraction: Double?
+    private(set) var packages = 0
+    private var needBytes = 0.0
+    private var gotBytes = 0.0
+    private var unpacked = 0
+    private var configured = 0
+    private var inPackageDownload = false
+
+    var percent: Int? { fraction.map { Int(($0 * 100).rounded(.down)) } }
+
+    mutating func ingest(_ raw: String) {
+        let line = TerminalText.clean(raw)
+        if line.contains("[resolver]") || line.contains(" FROM ") || line.contains("oci-layout://") {
+            advance(.base, 0.03)
+        }
+        if line.contains("] RUN apt-get") { advance(.index, 0.06) }
+        if let n = Self.number(before: " newly installed", in: line) {
+            packages = n
+            inPackageDownload = true
+            advance(.download, 0.10)
+        }
+        if let kb = Self.size(after: "Need to get ", in: line) { needBytes = kb }
+        if line.contains(" Get:"), inPackageDownload, let kb = Self.bracketSize(in: line) {
+            gotBytes += kb
+            advance(.download, 0.10 + 0.45 * ratio(gotBytes, needBytes))
+        }
+        if line.contains(" Unpacking ") {
+            unpacked += 1
+            advance(.install, 0.55 + 0.10 * ratio(Double(unpacked), Double(packages)))
+        }
+        if line.contains(" Setting up ") {
+            configured += 1
+            advance(.install, 0.65 + 0.25 * ratio(Double(configured), Double(packages)))
+        }
+        if line.contains("] RUN rm -f") || line.contains("] COPY ") || line.contains("] RUN chmod") {
+            advance(.finishing, 0.92)
+        }
+        if line.contains("exporting to") || line.contains("exporting layers") { advance(.saving, 0.96) }
+    }
+
+    mutating func finish(success: Bool) {
+        if success { phase = .done; fraction = 1 } else { phase = .failed }
+    }
+
+    var display: TaskProgress {
+        TaskProgress(title: phase.rawValue, fraction: phase == .failed ? nil : fraction,
+                     detail: packages > 0 && (phase == .download || phase == .install) ? "\(packages) packages" : nil,
+                     state: phase == .done ? .done : phase == .failed ? .failed : .running)
+    }
+
+    private mutating func advance(_ next: Phase, _ value: Double) {
+        phase = next
+        fraction = max(fraction ?? 0, min(value, 0.99))
+    }
+
+    private func ratio(_ a: Double, _ b: Double) -> Double { b > 0 ? min(a / b, 1) : 0 }
+
+    /// "0 upgraded, 187 newly installed, …" → 187
+    static func number(before marker: String, in line: String) -> Int? {
+        guard let r = line.range(of: marker) else { return nil }
+        let head = line[..<r.lowerBound]
+        let digits = head.reversed().prefix { $0.isNumber }
+        return digits.isEmpty ? nil : Int(String(digits.reversed()))
+    }
+
+    /// "Need to get 1710 kB of archives." → 1710 (kB)
+    static func size(after marker: String, in line: String) -> Double? {
+        guard let r = line.range(of: marker) else { return nil }
+        let words = line[r.upperBound...].split(separator: " ")
+        guard words.count >= 2, let value = Double(words[0].replacingOccurrences(of: ",", with: "")) else { return nil }
+        return kilobytes(value, unit: String(words[1]))
+    }
+
+    /// "… netcat-openbsd arm64 1.229-1 [41.6 kB]" → 41.6
+    static func bracketSize(in line: String) -> Double? {
+        guard let open = line.range(of: "[", options: .backwards),
+              let close = line.range(of: "]", options: .backwards), open.upperBound < close.lowerBound else { return nil }
+        let words = line[open.upperBound..<close.lowerBound].split(separator: " ")
+        guard words.count == 2, let value = Double(words[0]) else { return nil }
+        return kilobytes(value, unit: String(words[1]))
+    }
+
+    private static func kilobytes(_ value: Double, unit: String) -> Double? {
+        switch unit {
+        case "B": value / 1000
+        case "kB": value
+        case "MB": value * 1000
+        case "GB": value * 1_000_000
+        default: nil
+        }
     }
 }

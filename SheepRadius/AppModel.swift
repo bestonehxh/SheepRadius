@@ -186,6 +186,9 @@ final class AppModel: ObservableObject {
     /// The Environment item a failed start (or the launch check) sent the person to. Drawn as
     /// a highlighted reason at the top of that pane and cleared when the pane is left.
     @Published var environmentFocus: EnvironmentItem?
+    /// `brew install` in progress, and since when (build 33) — the Environment pane's status row.
+    @Published private(set) var installProgress: BrewInstallProgress?
+    @Published private(set) var installStarted: Date?
     /// The user selected in the Users pane (and the group in Groups), **by name**.
     ///
     /// A name and not a UUID since build 17: the rows come from a directory snapshot now, and
@@ -416,6 +419,12 @@ final class AppModel: ObservableObject {
         }
         let demoPane = CommandLine.value(after: "-demoPane").flatMap(MainPane.named)
         if let demoPane { mainPane = demoPane }
+        // `-demoStartInstall 1` presses Install for a screenshot of its status row (build 33).
+        // Only together with `-demoInstallCommand`, so it can never run a real `brew install`.
+        if CommandLine.value(after: "-demoStartInstall") == "1",
+           CommandLine.value(after: "-demoInstallCommand") != nil {
+            installWithHomebrew(tools.missingFormulae.isEmpty ? ["container"] : tools.missingFormulae)
+        }
         if let name = CommandLine.value(after: "-demoSelect") {
             selectedUser = name
             selectedGroup = name
@@ -2003,7 +2012,15 @@ final class AppModel: ObservableObject {
             .split(separator: " ").map(String.init) ?? [brew, "install"] + formulae
         guard let executable = command.first else { return }
         installer.clearLog()
+        installProgress = BrewInstallProgress(formulae: formulae)
+        installStarted = Date()
+        installer.onLines = { [weak self] lines in
+            guard let self, var progress = self.installProgress else { return }
+            for line in lines { progress.ingest(line) }
+            self.installProgress = progress
+        }
         installer.onExit = { [weak self] status in
+            self?.installProgress?.finish(success: status == 0)
             guard status == 0 else { return }
             self?.refreshToolchain()
         }

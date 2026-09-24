@@ -160,11 +160,11 @@ struct InstallButton: View {
                 }
                     .buttonStyle(.borderedProminent).tint(Theme.accent)
                     .disabled(installer.isRunning)
-                if installer.isRunning {
-                    ProgressView().controlSize(.small)
-                    Text("This takes a few minutes.").hint()
-                }
                 Spacer(minLength: 0)
+            }
+            // Build 33: a percentage and the step, the same row Build image has.
+            if let progress = model.installProgress {
+                TaskProgressRow(progress: progress.display, started: model.installStarted)
             }
 
             if !installer.log.isEmpty {
