@@ -365,7 +365,8 @@ extension AppModel {
             let key = computer.account.lowercased()
             if let hash = try? await provider.ntHash(of: computer.account) { hashes[key] = hash }
         }
-        let text = ConfigGenerator.authorize(snapshot: directory, passwords: passwords, hashes: hashes)
+        let text = ConfigGenerator.authorize(snapshot: directory, passwords: passwords, hashes: hashes,
+                                             loginNames: applied.settings.radiusLoginNames)
         lastDirectoryAuthorize = text
         return text
     }

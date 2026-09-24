@@ -56,6 +56,19 @@ struct RadiusServerView: View {
                 \(RadiusAuthorize.chapNeedsCleartext)
                 """) {
                     KeyValueRow("Accounts come from") { MonoValue(value: sourceLine) }
+                    // 2.0 (3): which spellings of an account radiusd answers to.
+                    KeyValueRow("Accepted login names") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Username — alice", isOn: $model.doc.settings.radiusLoginNames.username)
+                            Toggle("User principal name — alice@\(model.doc.settings.labDomain)",
+                                   isOn: $model.doc.settings.radiusLoginNames.userPrincipalName)
+                            Toggle("Down-level name — DOMAIN\\alice (Samba AD)",
+                                   isOn: $model.doc.settings.radiusLoginNames.downLevel)
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                    NoteRow(text: "Windows accepts all three. Turn Username off to make the lab UPN-only, "
+                            + "the way a device set to log in by userPrincipalName behaves against Active Directory.")
                     if model.radiusHasNoDirectory {
                         NoteRow(text: "LDAP is off, so every login is rejected until it is started.",
                                 systemImage: "exclamationmark.triangle.fill", tint: Theme.warn)

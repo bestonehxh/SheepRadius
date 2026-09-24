@@ -279,11 +279,18 @@ nonisolated struct LabSettings: Codable, Hashable, Sendable {
     /// `-> TRUE` trace and the TLS session details. See `LogView`'s toggle.
     var radiusDebug = false
 
+    /// **Which spellings of a login RADIUS accepts** (2.0 (3), owner: a device set to UPN still
+    /// let a bare username in, where Windows would not). One `authorize` entry per enabled form,
+    /// each carrying the same password and the same identity items. All three on by default —
+    /// what Windows NPS accepts; turning **Username** off makes the lab UPN-only.
+    var radiusLoginNames = RadiusLoginNames()
+
     // `publishNTHashes` post-dates the first lab.json, so decode every key optionally.
     enum CodingKeys: String, CodingKey {
         case authPort, acctPort, defaultEAP, tlsMaxVersion, serverCertName
         case ldapEnabled, ldapPort, ldapSuffix, ldapAdminPassword, publishNTHashes
         case ldapsEnabled, ldapsPort, ldapPlainEnabled, directoryBackend, ad, radiusDebug
+        case radiusLoginNames
         case ldapAdminDNOverride, ldapSuffixFollowsLabDomain
     }
 
@@ -317,6 +324,7 @@ nonisolated struct LabSettings: Codable, Hashable, Sendable {
         try c.encode(directoryBackend, forKey: .directoryBackend)
         try c.encode(ad, forKey: .ad)
         try c.encode(radiusDebug, forKey: .radiusDebug)
+        try c.encode(radiusLoginNames, forKey: .radiusLoginNames)
     }
 
     init(from decoder: any Decoder) throws {
@@ -352,6 +360,7 @@ nonisolated struct LabSettings: Codable, Hashable, Sendable {
         // but the quiet level is the better default and nothing a person can see changes, so
         // an old lab opens quiet rather than inheriting the old behaviour.
         radiusDebug = try c.decodeIfPresent(Bool.self, forKey: .radiusDebug) ?? d.radiusDebug
+        radiusLoginNames = try c.decodeIfPresent(RadiusLoginNames.self, forKey: .radiusLoginNames) ?? d.radiusLoginNames
     }
 
     /// What radiusd is launched with. `-f` foreground and `-l stdout` are what makes the debug
@@ -1532,5 +1541,43 @@ nonisolated enum ApplyScope {
     private static func list(_ parts: [String]) -> String {
         guard parts.count > 1 else { return parts.first ?? "" }
         return parts.dropLast().joined(separator: ", ") + " and " + (parts.last ?? "")
+    }
+}
+
+
+/// The spellings of an account RADIUS answers to (2.0 (3)). Measured on the Samba AD test
+/// domain before this existed: `alice` was accepted and `alice@test.sheep` / `TEST\alice` were
+/// rejected with "No Auth-Type found" — `authorize` had one entry per account and nothing in
+/// the configuration rewrites `User-Name` (see `MachineIdentity`), so the only name that worked
+/// was the one Windows' own LDAP bind refuses.
+nonisolated struct RadiusLoginNames: Codable, Hashable, Sendable {
+    /// `alice`
+    var username = true
+    /// `alice@lab.sheep` — the account's userPrincipalName.
+    var userPrincipalName = true
+    /// `LABSHEEP\alice` — Samba AD only; OpenLDAP has no NetBIOS domain.
+    var downLevel = true
+
+    init() {}
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        username = try c.decodeIfPresent(Bool.self, forKey: .username) ?? true
+        userPrincipalName = try c.decodeIfPresent(Bool.self, forKey: .userPrincipalName) ?? true
+        downLevel = try c.decodeIfPresent(Bool.self, forKey: .downLevel) ?? true
+    }
+
+    /// Every name one account is written under, in this order, without repeats (a UPN of
+    /// `alice@` nothing is not written; neither is a down-level name with no NetBIOS domain).
+    func names(username user: String, userPrincipalName upn: String, netbiosDomain: String) -> [String] {
+        var out: [String] = []
+        func add(_ name: String) {
+            guard !name.isEmpty, !out.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) else { return }
+            out.append(name)
+        }
+        if username { add(user) }
+        if userPrincipalName, upn.contains("@"), !upn.hasSuffix("@") { add(upn) }
+        if downLevel, !netbiosDomain.isEmpty { add(netbiosDomain.uppercased() + "\\" + user) }
+        return out
     }
 }

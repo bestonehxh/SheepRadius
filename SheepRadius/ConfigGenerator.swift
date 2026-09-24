@@ -76,6 +76,10 @@ nonisolated enum ConfigGenerator {
         		use_mppe = yes
         		require_encryption = yes
         		require_strong = yes
+        		# macOS builds default this to yes: a name with no password here is then checked
+        		# against this Mac's own Open Directory, so a local macOS account could log in over
+        		# MS-CHAP / PEAP. The lab's accounts are the directory's and nothing else (2.0 (3)).
+        		use_open_directory = no
         	}
         	files {
         		filename = "${confdir}/authorize"
@@ -323,7 +327,8 @@ nonisolated enum ConfigGenerator {
     /// Both dictionaries are keyed by **lower-cased** username, because `sAMAccountName` is
     /// case-insensitive and `uid` is matched case-insensitively by slapd.
     static func authorize(snapshot: DirectorySnapshot, passwords: [String: String],
-                          hashes: [String: String]) -> String {
+                          hashes: [String: String],
+                          loginNames: RadiusLoginNames = RadiusLoginNames()) -> String {
         var out = ""
         for user in snapshot.users where user.enabled && !user.username.isEmpty {
             let key = user.username.lowercased()
@@ -336,19 +341,31 @@ nonisolated enum ConfigGenerator {
                 out += "contains \"%{\", which FreeRADIUS expands and cannot escape.\n\n"
                 continue
             }
-            if let password = passwords[key] {
-                out += RadiusAuthorize.cleartextLine(username: user.username, password: password)
-            } else if let hash = hashes[key], !hash.isEmpty,
-                      let line = RadiusAuthorize.ntPasswordLine(username: user.username, hashHex: hash) {
-                out += line
-            } else {
+            guard passwords[key] != nil || !(hashes[key] ?? "").isEmpty else {
                 out += "# \(user.username): no password and no NT hash — the directory has the "
                 out += "account, this app has never set its password, and the backend would not "
                 out += "give up its hash.\n\n"
                 continue
             }
-            out += identityCheckItems(ou: user.ou, groups: user.groups)
-            out += "\n\n"
+            // One entry per accepted spelling (2.0 (3)) — `RadiusLoginNames`. The same
+            // credential and the same identity items on each, so a rule sees the same groups
+            // whichever form the device sent.
+            let names = loginNames.names(username: user.username, userPrincipalName: user.userPrincipalName,
+                                         netbiosDomain: snapshot.netbiosDomain)
+            if names.isEmpty {
+                out += "# \(user.username): every login-name form is switched off under RADIUS ▸ Server.\n\n"
+                continue
+            }
+            for name in names where isSafeForAuthorize(name) {
+                if let password = passwords[key] {
+                    out += RadiusAuthorize.cleartextLine(username: name, password: password)
+                } else if let hash = hashes[key],
+                          let line = RadiusAuthorize.ntPasswordLine(username: name, hashHex: hash) {
+                    out += line
+                } else { continue }
+                out += identityCheckItems(ou: user.ou, groups: user.groups)
+                out += "\n\n"
+            }
         }
         out += machineEntries(snapshot: snapshot, hashes: hashes)
         return out

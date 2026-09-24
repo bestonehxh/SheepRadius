@@ -1336,7 +1336,9 @@ nonisolated enum OpenLDAPRestart {
 /// than letting someone find out from a switch that will not authenticate.
 nonisolated enum RadiusAuthorize {
     static func cleartextLine(username: String, password: String) -> String {
-        "\"\(ConfigGenerator.quoted(username))\"\tCleartext-Password := \"\(ConfigGenerator.quoted(password))\""
+        // The NAME is an entry name, which the users parser does not unescape — a
+        // `DOMAIN\\alice` (2.0 (3)) must go in with one backslash. See `quotedEntryName`.
+        "\"\(ConfigGenerator.quotedEntryName(username) ?? ConfigGenerator.quoted(username))\"\tCleartext-Password := \"\(ConfigGenerator.quoted(password))\""
     }
 
     /// `"alice"  NT-Password := 0x89c1…` — the hash as FreeRADIUS wants it.
@@ -1402,12 +1404,13 @@ nonisolated enum RadiusApplyGate {
         var defaultEAP: EAPType
         var tlsMaxVersion: String
         var serverCertName: String
+        var loginNames: RadiusLoginNames
     }
 
     static func radiusSide(of settings: LabSettings) -> RadiusSettings {
         RadiusSettings(authPort: settings.authPort, acctPort: settings.acctPort,
                        defaultEAP: settings.defaultEAP, tlsMaxVersion: settings.tlsMaxVersion,
-                       serverCertName: settings.serverCertName)
+                       serverCertName: settings.serverCertName, loginNames: settings.radiusLoginNames)
     }
 
     static func differs(doc: LabDocument, from applied: LabDocument) -> Bool {
@@ -1428,6 +1431,7 @@ nonisolated enum RadiusApplyGate {
         applied.settings.defaultEAP = doc.settings.defaultEAP
         applied.settings.tlsMaxVersion = doc.settings.tlsMaxVersion
         applied.settings.serverCertName = doc.settings.serverCertName
+        applied.settings.radiusLoginNames = doc.settings.radiusLoginNames
     }
 }
 
