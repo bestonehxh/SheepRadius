@@ -11,10 +11,28 @@ struct EnvironmentView: View {
     @ObservedObject private var model = AppModel.shared
     @ObservedObject private var ad = AppModel.shared.ad
 
+    /// **The highlight lasts only while the thing is still missing** (build 33, owner: the
+    /// orange ring stayed after the build had finished until the pane was left). Derived rather
+    /// than cleared by hand, so every way of fixing it — Install, Build, Import, a Homebrew run
+    /// in Terminal — takes the ring away the moment the pane sees the new state.
+    private var focus: EnvironmentItem? {
+        guard let item = model.environmentFocus else { return nil }
+        switch item {
+        case .radius: return model.tools.radiusReady ? nil : item
+        case .ldap: return model.tools.ldapReady ? nil : item
+        // With the runtime installed the next thing missing is the image — the ring moves on
+        // to it rather than vanishing one step short of a domain that can start.
+        case .container:
+            if model.tools.containerTool == nil { return .container }
+            return ad.imageReference == nil ? .adImage : nil
+        case .adImage: return ad.imageReference == nil ? item : nil
+        }
+    }
+
     var body: some View {
         PaneBody {
             PaneHeader(PaneHeadline.block(for: "environment"))
-            if let focus = model.environmentFocus {
+            if let focus = focus {
                 PaneGroup("Needs attention") {
                     NoteRow(text: focus.reason, systemImage: "exclamationmark.triangle.fill", tint: Theme.warn)
                 }
@@ -22,7 +40,7 @@ struct EnvironmentView: View {
             servers
             if !model.tools.missingFormulae.isEmpty || model.tools.openssl == nil { install }
             ADPrerequisitesCard()
-                .overlay(focusRing(model.environmentFocus == .container || model.environmentFocus == .adImage))
+                .overlay(focusRing(focus == .container || focus == .adImage))
             files
         }
         .font(.system(size: 12.5))
@@ -43,7 +61,7 @@ struct EnvironmentView: View {
             component("LDAP client", model.ldapClientDescription, model.tools.ldapsearch)
             component("TLS", model.opensslDescription, model.tools.openssl)
         }
-        .overlay(focusRing(model.environmentFocus == .radius || model.environmentFocus == .ldap))
+        .overlay(focusRing(focus == .radius || focus == .ldap))
     }
 
     // MARK: Install (development builds only)
